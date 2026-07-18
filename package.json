@@ -1,0 +1,19 @@
+{
+  "name": "narrator-ai",
+  "version": "1.0.0",
+  "description": "NarradorAI - AI-powered video narration for social media content creation",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@google/genai": "^1.0.0",
+    "@ffmpeg/ffmpeg": "^0.12.15",
+    "@ffmpeg/util": "^0.12.2"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0"
+  }
+}
