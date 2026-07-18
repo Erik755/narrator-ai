@@ -11,7 +11,7 @@ import { renderPreview } from './components/preview.js';
 import { renderExport } from './components/export.js';
 import { renderHistory } from './components/history.js';
 import { getApiKey, saveProject } from './services/storage.js';
-import { initGemini, isInitialized, analyzeVideo } from './services/gemini.js';
+import { initNvidia as initAI, isInitialized as isAIInitialized, analyzeVideo, validateApiKey } from './services/nvidia.js';
 import { getAvailableVoices, generateAudio, previewScript, stopPreview } from './services/tts.js';
 import { initFFmpeg, exportFinalVideo } from './services/ffmpeg.js';
 import { generateSRT } from './utils/srt.js';
@@ -38,7 +38,7 @@ export function initApp() {
   // Check for API key
   const apiKey = getApiKey();
   if (apiKey) {
-    initGemini(apiKey);
+    initAI(apiKey);
     navigateTo('upload');
   } else {
     navigateTo('setup');
