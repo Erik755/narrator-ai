@@ -67,7 +67,7 @@ async function extractFrames(videoFile, maxFrames = 8) {
       URL.revokeObjectURL(url);
       resolve(frames);
     };
-    video.onerror = reject;
+    video.onerror = () => reject(new Error('El archivo no es un video válido o está corrupto.'));
   });
 }
 
@@ -102,14 +102,14 @@ export async function analyzeVideo(videoFile, tone, language, onProgress) {
     },
     body: JSON.stringify({
       apiKey,
-      model: 'nvidia/nemotron-nano-12b-v2-vl',
+      model: 'meta/llama-3.2-11b-vision-instruct',
       messages: [
         {
           role: 'user',
           content: content
         }
       ],
-      temperature: 0.7,
+      temperature: 0.2, // Lower temp for more reliable JSON
       max_tokens: 1024,
     })
   });
@@ -120,21 +120,33 @@ export async function analyzeVideo(videoFile, tone, language, onProgress) {
   }
 
   const data = await response.json();
-  const text = data.choices[0].message.content;
+  let text = data.choices[0].message.content;
   
   onProgress?.('done', 'Análisis completo');
   
+  // Helper to aggressively clean bad JSON from LLMs
+  const sanitizeJSON = (str) => {
+    // Remove markdown blocks
+    str = str.replace(/```json\n?/g, '').replace(/```\n?/g, '');
+    // Fix unquoted hashtags in arrays (e.g., ["#hashtag1", #hashtag2] -> ["#hashtag1", "#hashtag2"])
+    str = str.replace(/,\s*(#[a-zA-Z0-9_]+)/g, ', "$1"');
+    str = str.replace(/\[\s*(#[a-zA-Z0-9_]+)/g, '["$1"');
+    // Fix trailing commas
+    str = str.replace(/,\s*([\]}])/g, '$1');
+    return str.trim();
+  };
+
   try {
+    text = sanitizeJSON(text);
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
+    }
     return JSON.parse(text);
   } catch (e) {
-    const jsonMatch = text.match(/```json\n?([\s\S]*?)\n?```/);
-    if (jsonMatch) return JSON.parse(jsonMatch[1]);
-    
-    // Attempt fallback parsing if the model didn't return perfect JSON
-    const fallbackMatch = text.match(/\{[\s\S]*\}/);
-    if (fallbackMatch) return JSON.parse(fallbackMatch[0]);
-    
-    throw new Error('Failed to parse AI response as JSON');
+    console.error("Original text:", data.choices[0].message.content);
+    console.error("Sanitized text:", text);
+    throw new Error('El modelo de IA no generó un formato JSON válido.');
   }
 }
 
