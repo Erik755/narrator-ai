@@ -102,7 +102,7 @@ export async function analyzeVideo(videoFile, tone, language, onProgress) {
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      model: 'nvidia/cosmos3-nano-reasoner',
+      model: 'nvidia/neva-22b',
       messages: [
         {
           role: 'user',
@@ -110,7 +110,7 @@ export async function analyzeVideo(videoFile, tone, language, onProgress) {
         }
       ],
       temperature: 0.7,
-      max_tokens: 2048,
+      max_tokens: 1024,
     })
   });
 
@@ -147,7 +147,7 @@ export async function validateApiKey(key) {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'nvidia/cosmos3-nano-reasoner',
+        model: 'meta/llama-3.3-70b-instruct',
         messages: [{ role: 'user', content: 'Say "ok"' }],
         max_tokens: 10
       })
