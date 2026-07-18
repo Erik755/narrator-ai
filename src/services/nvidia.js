@@ -24,7 +24,7 @@ export function isInitialized() {
  * @param {number} maxFrames 
  * @returns {Promise<string[]>} Array of base64 JPEG images
  */
-async function extractFrames(videoFile, maxFrames = 8) {
+async function extractFrames(videoFile, maxFrames = 4) {
   return new Promise((resolve, reject) => {
     const video = document.createElement('video');
     const url = URL.createObjectURL(videoFile);
@@ -33,12 +33,9 @@ async function extractFrames(videoFile, maxFrames = 8) {
     
     video.onloadedmetadata = async () => {
       const duration = video.duration;
-      const interval = duration / maxFrames;
-      const frames = [];
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
+      // We will create a 2x2 collage (4 frames)
+      const interval = duration / 4;
       
-      // Target resolution (reduce size to save tokens/bandwidth)
       const MAX_DIM = 512;
       let width = video.videoWidth;
       let height = video.videoHeight;
@@ -47,25 +44,40 @@ async function extractFrames(videoFile, maxFrames = 8) {
       } else {
         if (height > MAX_DIM) { width *= MAX_DIM / height; height = MAX_DIM; }
       }
-      canvas.width = Math.floor(width);
-      canvas.height = Math.floor(height);
+      
+      const frameWidth = Math.floor(width);
+      const frameHeight = Math.floor(height);
+      
+      const canvas = document.createElement('canvas');
+      // 2x2 grid
+      canvas.width = frameWidth * 2;
+      canvas.height = frameHeight * 2;
+      const ctx = canvas.getContext('2d');
+      
+      const positions = [
+        [0, 0],
+        [frameWidth, 0],
+        [0, frameHeight],
+        [frameWidth, frameHeight]
+      ];
 
-      for (let i = 0; i < maxFrames; i++) {
+      for (let i = 0; i < 4; i++) {
         const time = Math.min(i * interval + (interval / 2), duration - 0.1);
         video.currentTime = time;
         
         await new Promise(r => {
           video.onseeked = () => {
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            // Get base64 without prefix for OpenAI payload format
-            const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
-            frames.push(dataUrl);
+            const [x, y] = positions[i];
+            ctx.drawImage(video, x, y, frameWidth, frameHeight);
             r();
           };
         });
       }
       URL.revokeObjectURL(url);
-      resolve(frames);
+      
+      // Return a single image containing the 4-frame collage
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+      resolve([dataUrl]);
     };
     video.onerror = () => reject(new Error('El archivo no es un video válido o está corrupto.'));
   });
