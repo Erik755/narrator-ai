@@ -102,7 +102,7 @@ export async function analyzeVideo(videoFile, tone, language, onProgress) {
     },
     body: JSON.stringify({
       apiKey,
-      model: 'nvidia/neva-22b',
+      model: 'nvidia/nemotron-nano-12b-v2-vl',
       messages: [
         {
           role: 'user',

@@ -72,63 +72,50 @@ ol {
   /* ── Color Palette ─────────────────────────────────────── */
 
   /* Backgrounds */
-  --color-bg-base:        #0B0F19;
-  --color-bg-elevated:    #111827;
-  --color-bg-surface:     #1F2937;
-  --color-bg-card:        rgba(255, 255, 255, 0.05);
-  --color-bg-card-hover:  rgba(255, 255, 255, 0.08);
-  --color-bg-input:       rgba(255, 255, 255, 0.04);
-  --color-bg-input-focus: rgba(255, 255, 255, 0.06);
-  --color-bg-overlay:     rgba(0, 0, 0, 0.6);
+  --color-bg-base:        #05050A; /* Extremely deep blue-black */
+  --color-bg-elevated:    #0A0A12;
+  --color-bg-surface:     #12121A;
+  --color-bg-card:        rgba(20, 20, 30, 0.4);
+  --color-bg-card-hover:  rgba(30, 30, 45, 0.5);
+  --color-bg-input:       rgba(20, 20, 30, 0.6);
+  --color-bg-input-focus: rgba(30, 30, 45, 0.8);
+  --color-bg-overlay:     rgba(0, 0, 0, 0.8);
 
   /* Brand / Primary */
-  --color-primary:        #6366F1;
-  --color-primary-light:  #818CF8;
-  --color-primary-dark:   #4F46E5;
-  --color-primary-glow:   rgba(99, 102, 241, 0.25);
+  --color-primary:        #8B5CF6; /* Violet */
+  --color-primary-light:  #A78BFA;
+  --color-primary-dark:   #7C3AED;
+  --color-primary-glow:   rgba(139, 92, 246, 0.4);
 
   /* Accent / Purple */
-  --color-accent:         #A855F7;
-  --color-accent-light:   #C084FC;
-  --color-accent-dark:    #9333EA;
-  --color-accent-glow:    rgba(168, 85, 247, 0.25);
-
-  /* Pink */
-  --color-pink:           #EC4899;
-  --color-pink-light:     #F472B6;
-  --color-pink-dark:      #DB2777;
-  --color-pink-glow:      rgba(236, 72, 153, 0.25);
+  --color-accent:         #D946EF; /* Fuchsia */
+  --color-accent-light:   #E879F9;
+  --color-accent-dark:    #C026D3;
+  --color-accent-glow:    rgba(217, 70, 239, 0.4);
 
   /* Semantic */
   --color-success:        #10B981;
-  --color-success-light:  #34D399;
-  --color-success-glow:   rgba(16, 185, 129, 0.20);
+  --color-success-glow:   rgba(16, 185, 129, 0.3);
   --color-warning:        #F59E0B;
-  --color-warning-light:  #FBBF24;
-  --color-warning-glow:   rgba(245, 158, 11, 0.20);
+  --color-warning-glow:   rgba(245, 158, 11, 0.3);
   --color-error:          #EF4444;
-  --color-error-light:    #F87171;
-  --color-error-glow:     rgba(239, 68, 68, 0.20);
-  --color-info:           #3B82F6;
-  --color-info-light:     #60A5FA;
-  --color-info-glow:      rgba(59, 130, 246, 0.20);
+  --color-error-glow:     rgba(239, 68, 68, 0.3);
 
   /* Text */
-  --color-text-primary:   rgba(255, 255, 255, 0.95);
-  --color-text-secondary: rgba(255, 255, 255, 0.60);
-  --color-text-muted:     rgba(255, 255, 255, 0.35);
-  --color-text-disabled:  rgba(255, 255, 255, 0.18);
+  --color-text-primary:   #F8FAFC;
+  --color-text-secondary: #94A3B8;
+  --color-text-muted:     #475569;
 
   /* Borders */
-  --color-border:         rgba(255, 255, 255, 0.08);
-  --color-border-hover:   rgba(255, 255, 255, 0.14);
-  --color-border-focus:   rgba(99, 102, 241, 0.50);
+  --color-border:         rgba(255, 255, 255, 0.05);
+  --color-border-hover:   rgba(255, 255, 255, 0.1);
+  --color-border-focus:   rgba(139, 92, 246, 0.5);
 
   /* Gradients */
-  --gradient-brand:       linear-gradient(135deg, #6366F1 0%, #A855F7 50%, #EC4899 100%);
-  --gradient-brand-hover: linear-gradient(135deg, #818CF8 0%, #C084FC 50%, #F472B6 100%);
-  --gradient-surface:     linear-gradient(145deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%);
-  --gradient-glow:        radial-gradient(ellipse at 50% 0%, rgba(99,102,241,0.15) 0%, transparent 60%);
+  --gradient-brand:       linear-gradient(135deg, #8B5CF6 0%, #D946EF 100%);
+  --gradient-brand-hover: linear-gradient(135deg, #A78BFA 0%, #E879F9 100%);
+  --gradient-surface:     linear-gradient(145deg, rgba(20,20,30,0.6) 0%, rgba(10,10,15,0.4) 100%);
+  --gradient-glow:        radial-gradient(circle at 50% 0%, rgba(139,92,246,0.15) 0%, transparent 50%);
 
   /* ── Spacing Scale (4px base) ──────────────────────────── */
   --space-1:   0.25rem;  /*  4px */
@@ -151,35 +138,6 @@ ol {
   --radius-md:   0.75rem;
   --radius-lg:   1rem;
   --radius-xl:   1.25rem;
-  --radius-2xl:  1.5rem;
-  --radius-full: 50%;
-  --radius-pill: 9999px;
-
-  /* ── Layered Shadows ───────────────────────────────────── */
-  --shadow-xs:
-    0 1px 2px rgba(0, 0, 0, 0.30);
-  --shadow-sm:
-    0 1px 3px rgba(0, 0, 0, 0.25),
-    0 1px 2px rgba(0, 0, 0, 0.20);
-  --shadow-md:
-    0 4px 6px -1px rgba(0, 0, 0, 0.30),
-    0 2px 4px -2px rgba(0, 0, 0, 0.25);
-  --shadow-lg:
-    0 10px 15px -3px rgba(0, 0, 0, 0.35),
-    0 4px 6px -4px rgba(0, 0, 0, 0.30);
-  --shadow-xl:
-    0 20px 25px -5px rgba(0, 0, 0, 0.40),
-    0 8px 10px -6px rgba(0, 0, 0, 0.30);
-  --shadow-2xl:
-    0 25px 50px -12px rgba(0, 0, 0, 0.55);
-  --shadow-glow-primary:
-    0 0 20px rgba(99, 102, 241, 0.20),
-    0 0 40px rgba(99, 102, 241, 0.10);
-  --shadow-glow-accent:
-    0 0 20px rgba(168, 85, 247, 0.20),
-    0 0 40px rgba(168, 85, 247, 0.10);
-  --shadow-glow-success:
-    0 0 15px rgba(16, 185, 129, 0.20);
   --shadow-glow-error:
     0 0 15px rgba(239, 68, 68, 0.20);
   --shadow-inner:
