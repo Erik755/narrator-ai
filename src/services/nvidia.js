@@ -95,13 +95,13 @@ export async function analyzeVideo(videoFile, tone, language, onProgress) {
     });
   }
 
-  const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+  const response = await fetch('/api/nvidia', {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
+      apiKey,
       model: 'nvidia/neva-22b',
       messages: [
         {
@@ -140,13 +140,13 @@ export async function analyzeVideo(videoFile, tone, language, onProgress) {
 
 export async function validateApiKey(key) {
   try {
-    const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+    const response = await fetch('/api/nvidia', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${key}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
+        apiKey: key,
         model: 'meta/llama-3.3-70b-instruct',
         messages: [{ role: 'user', content: 'Say "ok"' }],
         max_tokens: 10
