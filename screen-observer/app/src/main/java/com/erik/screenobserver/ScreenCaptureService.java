@@ -10,8 +10,7 @@ import android.media.projection.MediaProjection;
 import android.media.projection.MediaProjectionManager;
 import android.os.*;
 import android.speech.tts.TextToSpeech;
-import android.view.*;
-import android.widget.TextView;
+import android.widget.Toast;
 
 import com.google.mlkit.vision.common.InputImage;
 import com.google.mlkit.vision.text.TextRecognition;
@@ -22,11 +21,13 @@ import java.nio.ByteBuffer;
 import java.util.Locale;
 
 public class ScreenCaptureService extends Service {
-    private static final String CHANNEL = "screen_observer_capture";
+    private static final String CHANNEL_CAPTURE = "screen_observer_capture";
+    private static final String CHANNEL_ADVICE = "screen_observer_advice";
+    private static final int FOREGROUND_ID = 7;
+    private static final int ADVICE_ID = 8;
+
     private MediaProjection projection;
     private ImageReader reader;
-    private WindowManager windowManager;
-    private TextView overlay;
     private TextToSpeech tts;
     private TextRecognizer recognizer;
     private long lastProcess = 0;
@@ -34,25 +35,35 @@ public class ScreenCaptureService extends Service {
 
     @Override public void onCreate() {
         super.onCreate();
-        createChannel();
-        Notification notification = new Notification.Builder(this, CHANNEL)
+        createChannels();
+        Notification notification = new Notification.Builder(this, CHANNEL_CAPTURE)
                 .setContentTitle("Screen Observer Pro")
                 .setContentText("Monitoreando la pantalla localmente")
                 .setSmallIcon(android.R.drawable.ic_menu_view)
                 .setOngoing(true)
                 .build();
-        startForeground(7, notification);
+        startForeground(FOREGROUND_ID, notification);
+
         recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
         tts = new TextToSpeech(this, status -> {
-            if (status == TextToSpeech.SUCCESS) tts.setLanguage(new Locale("es", "MX"));
+            if (status == TextToSpeech.SUCCESS) {
+                tts.setLanguage(new Locale("es", "MX"));
+                tts.setSpeechRate(1.08f);
+            }
         });
-        createOverlay();
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (projection != null) return START_NOT_STICKY;
+        if (intent == null) { stopSelf(); return START_NOT_STICKY; }
+
         int resultCode = intent.getIntExtra("resultCode", Activity.RESULT_CANCELED);
-        Intent data = intent.getParcelableExtra("data");
+        Intent data;
+        if (Build.VERSION.SDK_INT >= 33) {
+            data = intent.getParcelableExtra("data", Intent.class);
+        } else {
+            data = intent.getParcelableExtra("data");
+        }
         if (resultCode != Activity.RESULT_OK || data == null) { stopSelf(); return START_NOT_STICKY; }
 
         MediaProjectionManager mpm = (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
@@ -64,7 +75,7 @@ public class ScreenCaptureService extends Service {
         android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
         int width = Math.max(360, dm.widthPixels / 2);
         int height = Math.max(640, dm.heightPixels / 2);
-        int density = dm.densityDpi;
+        int density = Math.max(160, dm.densityDpi / 2);
         reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2);
         reader.setOnImageAvailableListener(this::onImage, new Handler(Looper.getMainLooper()));
         projection.createVirtualDisplay("ScreenObserver", width, height, density,
@@ -79,20 +90,23 @@ public class ScreenCaptureService extends Service {
         if (image == null) return;
         if (now - lastProcess < 650) { image.close(); return; }
         lastProcess = now;
+
         Bitmap bitmap = imageToBitmap(image);
         image.close();
         if (bitmap == null) return;
 
         recognizer.process(InputImage.fromBitmap(bitmap, 0))
                 .addOnSuccessListener(result -> {
+                    bitmap.recycle();
                     String text = result.getText() == null ? "" : result.getText().trim();
                     if (!meaningfulChange(text)) return;
                     lastText = text;
                     String description = describe(text);
                     String advice = advise(text);
-                    updateOverlay(description + "\n\n" + advice);
-                    speak(advice);
-                });
+                    publishAdvice(description, advice);
+                    speak(description + ". " + advice);
+                })
+                .addOnFailureListener(e -> bitmap.recycle());
     }
 
     private Bitmap imageToBitmap(Image image) {
@@ -107,7 +121,9 @@ public class ScreenCaptureService extends Service {
             Bitmap cropped = Bitmap.createBitmap(padded, 0, 0, image.getWidth(), image.getHeight());
             if (padded != cropped) padded.recycle();
             return cropped;
-        } catch (Exception e) { return null; }
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private boolean meaningfulChange(String text) {
@@ -122,7 +138,7 @@ public class ScreenCaptureService extends Service {
     }
 
     private String describe(String text) {
-        if (text.isEmpty()) return "Descripción: no detecto texto legible en este momento.";
+        if (text.isEmpty()) return "Descripción: no detecto texto legible en este momento";
         String compact = text.replace('\n', ' ').replaceAll("\\s+", " ");
         if (compact.length() > 220) compact = compact.substring(0, 220) + "…";
         return "Descripción: veo texto en pantalla: “" + compact + "”";
@@ -138,41 +154,51 @@ public class ScreenCaptureService extends Service {
             return "Consejo: parece haber una opción para avanzar. Verifica primero que la información actual sea correcta.";
         if (t.contains("cancel") || t.contains("cancelar"))
             return "Consejo: hay una opción de cancelar; úsala si la acción actual no coincide con lo que deseas hacer.";
-        if (text.isEmpty()) return "Consejo: mantengo el monitoreo; aún no hay suficiente información textual para recomendar una acción.";
+        if (text.isEmpty())
+            return "Consejo: mantengo el monitoreo; aún no hay suficiente información textual para recomendar una acción.";
         return "Consejo: la pantalla cambió. Revisa las opciones visibles y prioriza la acción que coincida con tu objetivo; seguiré avisando cuando detecte cambios relevantes.";
     }
 
-    private void createOverlay() {
-        windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
-        overlay = new TextView(this);
-        overlay.setText("Screen Observer Pro\nEsperando cambios…");
-        overlay.setTextColor(0xFFFFFFFF);
-        overlay.setTextSize(13);
-        overlay.setPadding(22, 16, 22, 16);
-        overlay.setBackgroundColor(0xD9000000);
-        WindowManager.LayoutParams p = new WindowManager.LayoutParams(
-                Math.min(getResources().getDisplayMetrics().widthPixels - 40, 760),
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-                PixelFormat.TRANSLUCENT);
-        p.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
-        p.y = 90;
-        try { windowManager.addView(overlay, p); } catch (Exception ignored) {}
-    }
-
-    private void updateOverlay(String value) {
-        if (overlay != null) overlay.setText(value);
+    private void publishAdvice(String description, String advice) {
+        String body = description + "\n\n" + advice;
+        Notification n = new Notification.Builder(this, CHANNEL_ADVICE)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle("Screen Observer Pro — análisis")
+                .setContentText(advice)
+                .setStyle(new Notification.BigTextStyle().bigText(body))
+                .setAutoCancel(true)
+                .setPriority(Notification.PRIORITY_HIGH)
+                .setDefaults(Notification.DEFAULT_ALL)
+                .build();
+        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        nm.notify(ADVICE_ID, n);
+        Toast.makeText(this, advice, Toast.LENGTH_SHORT).show();
     }
 
     private void speak(String value) {
-        if (tts != null && value != null) tts.speak(value, TextToSpeech.QUEUE_FLUSH, null, "screen_advice");
+        if (tts != null && value != null) {
+            tts.speak(value, TextToSpeech.QUEUE_FLUSH, null, "screen_advice");
+        }
     }
 
-    private void createChannel() {
+    private void createChannels() {
         if (Build.VERSION.SDK_INT >= 26) {
-            NotificationChannel c = new NotificationChannel(CHANNEL, "Screen capture", NotificationManager.IMPORTANCE_LOW);
-            getSystemService(NotificationManager.class).createNotificationChannel(c);
+            NotificationManager nm = getSystemService(NotificationManager.class);
+
+            NotificationChannel capture = new NotificationChannel(
+                    CHANNEL_CAPTURE,
+                    "Monitoreo de pantalla",
+                    NotificationManager.IMPORTANCE_LOW);
+            capture.setDescription("Mantiene activo el análisis local de pantalla");
+            nm.createNotificationChannel(capture);
+
+            NotificationChannel advice = new NotificationChannel(
+                    CHANNEL_ADVICE,
+                    "Consejos de pantalla",
+                    NotificationManager.IMPORTANCE_HIGH);
+            advice.setDescription("Muestra descripción y recomendaciones detectadas en pantalla");
+            advice.enableVibration(true);
+            nm.createNotificationChannel(advice);
         }
     }
 
@@ -181,7 +207,6 @@ public class ScreenCaptureService extends Service {
         if (projection != null) projection.stop();
         if (recognizer != null) recognizer.close();
         if (tts != null) { tts.stop(); tts.shutdown(); }
-        if (overlay != null && windowManager != null) try { windowManager.removeView(overlay); } catch (Exception ignored) {}
         super.onDestroy();
     }
 
