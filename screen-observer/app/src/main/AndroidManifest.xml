@@ -16,8 +16,9 @@
         android:allowBackup="false"
         android:label="@string/app_name"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
         <activity
-            android:name=".MainActivity"
+            android:name=".MainActivityV2"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -26,12 +27,12 @@
         </activity>
 
         <service
-            android:name=".ScreenCaptureService"
+            android:name=".ScreenAgentService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection|microphone" />
 
         <service
-            android:name=".UIControlService"
+            android:name=".AgentAccessibilityService"
             android:label="@string/accessibility_service_name"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
             android:exported="true">
