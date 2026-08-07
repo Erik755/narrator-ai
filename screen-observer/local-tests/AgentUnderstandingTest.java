@@ -1,4 +1,5 @@
 import com.erik.screenobserver.AndroidSkillPack;
+import com.erik.screenobserver.CaptureGeometry;
 import com.erik.screenobserver.IntentAgent;
 
 import java.util.ArrayList;
@@ -35,6 +36,9 @@ public final class AgentUnderstandingTest {
         secondHypothesisCanWinWithoutScores();
         aliasesIncludeCommonAndroidLabels();
         androidContextIsDetected();
+        captureSizingPreservesAspectRatio();
+        rotationMappingIsSafe();
+        appWindowMappingIsRejected();
 
         System.out.println("PASS " + passed + "/" + passed);
     }
@@ -93,6 +97,27 @@ public final class AgentUnderstandingTest {
     private static void androidContextIsDetected() {
         require(AndroidSkillPack.looksLikeAndroidContext("com.android.settings", "Permisos de aplicaciones"),
                 "Android Settings context should be detected");
+        passed++;
+    }
+
+    private static void captureSizingPreservesAspectRatio() {
+        int[] portrait = CaptureGeometry.targetSize(1080, 2400);
+        require(portrait[1] == 1280, "long edge must be capped at 1280");
+        double inAspect = 1080.0 / 2400.0;
+        double outAspect = portrait[0] / (double) portrait[1];
+        require(Math.abs(inAspect - outAspect) < 0.002, "capture aspect ratio must be preserved");
+        passed++;
+    }
+
+    private static void rotationMappingIsSafe() {
+        require(CaptureGeometry.isDirectScreenMappingSafe(2400, 1080, 2400, 1080),
+                "full-screen landscape rotation should remain directly mappable");
+        passed++;
+    }
+
+    private static void appWindowMappingIsRejected() {
+        require(!CaptureGeometry.isDirectScreenMappingSafe(1000, 1000, 1080, 2400),
+                "square app-window capture must not be mapped to full-screen tap coordinates");
         passed++;
     }
 
