@@ -45,34 +45,56 @@ public class ScreenCaptureService extends Service {
     public static final String ACTION_DESCRIBE_CONTROLS = "com.erik.screenobserver.DESCRIBE_CONTROLS";
 
     private static final String CHANNEL_CAPTURE = "screen_observer_capture";
-    private static final String CHANNEL_ADVICE = "screen_observer_advice";
     private static final int FOREGROUND_ID = 7;
-    private static final int ADVICE_ID = 8;
+
+    private static volatile boolean runningState = false;
+    private static volatile boolean listeningState = false;
+    private static volatile String voiceStatus = "detenido";
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+
     private MediaProjection projection;
     private ImageReader reader;
     private TextRecognizer textRecognizer;
     private TextToSpeech tts;
+    private boolean ttsReady = false;
     private SpeechRecognizer speechRecognizer;
     private Intent speechIntent;
     private SkillManager skillManager;
 
     private long lastProcess = 0;
-    private long lastAutoSpeak = 0;
+    private long ignoreRecognitionUntil = 0;
     private String lastText = "";
     private String lastAdvice = "Esperando cambios en pantalla.";
     private boolean listeningEnabled = true;
     private boolean isListening = false;
     private boolean isSpeaking = false;
-    private boolean autoSpeech = true;
+    private int consecutiveSpeechErrors = 0;
     private String pendingDangerousTarget = "";
     private long pendingDangerousUntil = 0;
 
+    public static boolean isRunning() {
+        return runningState;
+    }
+
+    public static boolean isListeningEnabled() {
+        return runningState && listeningState;
+    }
+
+    public static String getVoiceStatus() {
+        return voiceStatus == null ? "" : voiceStatus;
+    }
+
     @Override public void onCreate() {
         super.onCreate();
+        runningState = true;
+        listeningEnabled = true;
+        listeningState = true;
+        voiceStatus = "preparando micrófono";
+
         createChannels();
         startForeground(FOREGROUND_ID, buildForegroundNotification());
+
         skillManager = new SkillManager(this);
         textRecognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
         setupTts();
@@ -86,26 +108,35 @@ public class ScreenCaptureService extends Service {
         if (ACTION_SHOW_OVERLAY.equals(action)) {
             if (!ensureRunning()) return START_NOT_STICKY;
             UIControlService ui = UIControlService.getInstance();
-            if (ui != null) ui.showOverlay(); else speakDirect("Activa primero Control de pantalla en Accesibilidad.");
+            if (ui != null) {
+                ui.showOverlay();
+                silentStatus("Mini ventana visible.");
+            } else {
+                silentStatus("Activa Control de pantalla en Accesibilidad.");
+            }
             refreshForegroundNotification();
             return START_NOT_STICKY;
         }
+
         if (ACTION_HIDE_OVERLAY.equals(action)) {
             if (!ensureRunning()) return START_NOT_STICKY;
             UIControlService ui = UIControlService.getInstance();
             if (ui != null) ui.hideOverlay();
+            silentStatus("Mini ventana oculta.");
             refreshForegroundNotification();
             return START_NOT_STICKY;
         }
+
         if (ACTION_TOGGLE_LISTENING.equals(action)) {
             if (!ensureRunning()) return START_NOT_STICKY;
             toggleListening();
             refreshForegroundNotification();
             return START_NOT_STICKY;
         }
+
         if (ACTION_DESCRIBE_CONTROLS.equals(action)) {
             if (!ensureRunning()) return START_NOT_STICKY;
-            describeControls();
+            describeControls(true);
             return START_NOT_STICKY;
         }
 
@@ -113,25 +144,34 @@ public class ScreenCaptureService extends Service {
 
         int resultCode = intent.getIntExtra("resultCode", Activity.RESULT_CANCELED);
         Intent data;
-        if (Build.VERSION.SDK_INT >= 33) data = intent.getParcelableExtra("data", Intent.class);
-        else data = intent.getParcelableExtra("data");
+        if (Build.VERSION.SDK_INT >= 33) {
+            data = intent.getParcelableExtra("data", Intent.class);
+        } else {
+            data = intent.getParcelableExtra("data");
+        }
+
         if (resultCode != Activity.RESULT_OK || data == null) {
+            silentStatus("No recibí permiso para capturar la pantalla.");
             stopSelf();
             return START_NOT_STICKY;
         }
 
-        MediaProjectionManager mpm = (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
+        MediaProjectionManager mpm =
+                (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
         projection = mpm.getMediaProjection(resultCode, data);
         projection.registerCallback(new MediaProjection.Callback() {
-            @Override public void onStop() { stopSelf(); }
+            @Override public void onStop() {
+                stopSelf();
+            }
         }, mainHandler);
 
         android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
         int width = Math.max(360, dm.widthPixels / 2);
         int height = Math.max(640, dm.heightPixels / 2);
         int density = Math.max(160, dm.densityDpi / 2);
+
         reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2);
-        reader.setOnImageAvailableListener(this::onImage, mainHandler);
+        reader.setOnImageAvailableListener(ScreenCaptureService.this::onImage, mainHandler);
         projection.createVirtualDisplay(
                 "ScreenObserver",
                 width,
@@ -142,9 +182,8 @@ public class ScreenCaptureService extends Service {
                 null,
                 null);
 
-        UIControlService ui = UIControlService.getInstance();
-        if (ui != null) ui.updateOverlay("Asistente activo. Di una orden.");
-        startListeningSoon(500);
+        silentStatus("Asistente activo. Estoy escuchando.");
+        startListeningSoon(350);
         refreshForegroundNotification();
         return START_NOT_STICKY;
     }
@@ -157,181 +196,364 @@ public class ScreenCaptureService extends Service {
 
     private void setupTts() {
         tts = new TextToSpeech(this, status -> {
-            if (status == TextToSpeech.SUCCESS) {
-                tts.setLanguage(new Locale("es", "MX"));
-                tts.setSpeechRate(1.06f);
-                tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
-                    @Override public void onStart(String utteranceId) {
-                        isSpeaking = true;
-                        cancelListening();
-                    }
+            if (status != TextToSpeech.SUCCESS) return;
+            ttsReady = true;
+            tts.setLanguage(new Locale("es", "MX"));
+            tts.setSpeechRate(1.04f);
+            tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+                @Override public void onStart(String utteranceId) {
+                    isSpeaking = true;
+                    voiceStatus = "respondiendo";
+                    cancelListening();
+                }
 
-                    @Override public void onDone(String utteranceId) {
-                        isSpeaking = false;
-                        startListeningSoon(400);
-                    }
+                @Override public void onDone(String utteranceId) {
+                    isSpeaking = false;
+                    ignoreRecognitionUntil = SystemClock.elapsedRealtime() + 1800;
+                    voiceStatus = listeningEnabled ? "esperando para escuchar" : "escucha pausada";
+                    startListeningSoon(1800);
+                }
 
-                    @Override public void onError(String utteranceId) {
-                        isSpeaking = false;
-                        startListeningSoon(400);
-                    }
-                });
-            }
+                @Override public void onError(String utteranceId) {
+                    isSpeaking = false;
+                    ignoreRecognitionUntil = SystemClock.elapsedRealtime() + 1800;
+                    voiceStatus = listeningEnabled ? "esperando para escuchar" : "escucha pausada";
+                    startListeningSoon(1800);
+                }
+            });
         });
     }
 
     private void setupSpeechRecognition() {
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return;
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) return;
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            voiceStatus = "permiso de micrófono pendiente";
+            listeningState = false;
+            return;
+        }
 
-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
-        speechRecognizer.setRecognitionListener(new RecognitionListener() {
-            @Override public void onReadyForSpeech(Bundle params) {
-                isListening = true;
-                updateOverlay("🎙 Escuchando…");
-            }
-            @Override public void onBeginningOfSpeech() { }
-            @Override public void onRmsChanged(float rmsdB) { }
-            @Override public void onBufferReceived(byte[] buffer) { }
-            @Override public void onEndOfSpeech() { isListening = false; }
-            @Override public void onError(int error) {
-                isListening = false;
-                if (listeningEnabled && !isSpeaking && error != SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
-                    startListeningSoon(error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY ? 900 : 450);
-                }
-            }
-            @Override public void onResults(Bundle results) {
-                isListening = false;
-                ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-                if (matches != null && !matches.isEmpty()) handleVoiceCommand(matches.get(0));
-                if (!isSpeaking) startListeningSoon(400);
-            }
-            @Override public void onPartialResults(Bundle partialResults) { }
-            @Override public void onEvent(int eventType, Bundle params) { }
-        });
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            voiceStatus = "motor de reconocimiento de voz no disponible";
+            listeningState = false;
+            return;
+        }
+
+        createSpeechRecognizer();
 
         speechIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-        speechIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+        speechIntent.putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
         speechIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "es-MX");
         speechIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "es-MX");
         speechIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-        speechIntent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
-        speechIntent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true);
+        speechIntent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5);
+
+        // Do not force offline recognition. On some Motorola devices the Spanish
+        // offline model is not installed, which makes the recognizer appear deaf.
+        speechIntent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false);
+
+        speechIntent.putExtra(
+                RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 900L);
+        speechIntent.putExtra(
+                RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 650L);
+        speechIntent.putExtra(
+                RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 350L);
+    }
+
+    private void createSpeechRecognizer() {
+        destroySpeechRecognizer();
+
+        try {
+            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
+            speechRecognizer.setRecognitionListener(new RecognitionListener() {
+                @Override public void onReadyForSpeech(Bundle params) {
+                    consecutiveSpeechErrors = 0;
+                    isListening = true;
+                    listeningState = true;
+                    voiceStatus = "escuchando";
+                    updateOverlay("🎙 Escuchando…");
+                    refreshForegroundNotification();
+                }
+
+                @Override public void onBeginningOfSpeech() {
+                    voiceStatus = "te estoy oyendo";
+                    updateOverlay("🎙 Te estoy oyendo…");
+                }
+
+                @Override public void onRmsChanged(float rmsdB) { }
+
+                @Override public void onBufferReceived(byte[] buffer) { }
+
+                @Override public void onEndOfSpeech() {
+                    isListening = false;
+                    voiceStatus = "procesando lo que dijiste";
+                }
+
+                @Override public void onError(int error) {
+                    isListening = false;
+                    consecutiveSpeechErrors++;
+
+                    if (!listeningEnabled || isSpeaking) return;
+
+                    if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
+                        listeningState = false;
+                        voiceStatus = "sin permiso de micrófono";
+                        updateOverlay("Micrófono sin permiso.");
+                        return;
+                    }
+
+                    if (error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+                            || error == SpeechRecognizer.ERROR_NO_MATCH) {
+                        voiceStatus = "escuchando";
+                        startListeningSoon(250);
+                        return;
+                    }
+
+                    voiceStatus = speechErrorName(error);
+                    updateOverlay("Micrófono: " + voiceStatus);
+
+                    if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY
+                            || error == SpeechRecognizer.ERROR_CLIENT
+                            || error == SpeechRecognizer.ERROR_SERVER_DISCONNECTED
+                            || consecutiveSpeechErrors >= 4) {
+                        mainHandler.postDelayed(() -> {
+                            if (!listeningEnabled || isSpeaking) return;
+                            createSpeechRecognizer();
+                            startListeningSoon(650);
+                        }, 700);
+                    } else {
+                        startListeningSoon(error == SpeechRecognizer.ERROR_NETWORK ? 1400 : 650);
+                    }
+                }
+
+                @Override public void onResults(Bundle results) {
+                    isListening = false;
+                    consecutiveSpeechErrors = 0;
+
+                    ArrayList<String> matches =
+                            results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+
+                    if (matches != null && !matches.isEmpty()) {
+                        String heard = matches.get(0);
+                        voiceStatus = "oí: " + compact(heard, 55);
+                        updateOverlay("🎙 Oí: " + compact(heard, 70));
+                        handleVoiceCommand(heard);
+                    } else {
+                        voiceStatus = "escuchando";
+                    }
+
+                    if (!isSpeaking) startListeningSoon(350);
+                }
+
+                @Override public void onPartialResults(Bundle partialResults) {
+                    ArrayList<String> partial =
+                            partialResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                    if (partial != null && !partial.isEmpty()) {
+                        String heard = partial.get(0);
+                        voiceStatus = "oyendo: " + compact(heard, 45);
+                        updateOverlay("🎙 " + compact(heard, 70));
+                    }
+                }
+
+                @Override public void onEvent(int eventType, Bundle params) { }
+            });
+        } catch (Exception e) {
+            speechRecognizer = null;
+            listeningState = false;
+            voiceStatus = "no pude iniciar el reconocedor de voz";
+        }
     }
 
     private final Runnable startListeningRunnable = () -> {
-        if (!listeningEnabled || isSpeaking || isListening || speechRecognizer == null || speechIntent == null) return;
+        if (!listeningEnabled || isSpeaking || isListening
+                || speechRecognizer == null || speechIntent == null) return;
+
+        long now = SystemClock.elapsedRealtime();
+        if (now < ignoreRecognitionUntil) {
+            startListeningSoon(ignoreRecognitionUntil - now + 50);
+            return;
+        }
+
         try {
-            speechRecognizer.cancel();
+            voiceStatus = "iniciando escucha";
             speechRecognizer.startListening(speechIntent);
-        } catch (Exception ignored) { }
+        } catch (Exception e) {
+            voiceStatus = "reiniciando escucha";
+            mainHandler.postDelayed(() -> {
+                if (!listeningEnabled) return;
+                createSpeechRecognizer();
+                startListeningSoon(500);
+            }, 500);
+        }
     };
 
     private void startListeningSoon(long delayMs) {
         mainHandler.removeCallbacks(startListeningRunnable);
-        if (!listeningEnabled || isSpeaking || speechRecognizer == null || speechIntent == null) return;
-        mainHandler.postDelayed(startListeningRunnable, delayMs);
+        if (!listeningEnabled || isSpeaking || speechRecognizer == null || speechIntent == null) {
+            return;
+        }
+        mainHandler.postDelayed(startListeningRunnable, Math.max(100, delayMs));
     }
 
     private void cancelListening() {
         mainHandler.removeCallbacks(startListeningRunnable);
         if (speechRecognizer != null) {
-            try { speechRecognizer.cancel(); } catch (Exception ignored) { }
+            try {
+                speechRecognizer.cancel();
+            } catch (Exception ignored) { }
         }
+        isListening = false;
+    }
+
+    private void destroySpeechRecognizer() {
+        if (speechRecognizer != null) {
+            try {
+                speechRecognizer.cancel();
+            } catch (Exception ignored) { }
+            try {
+                speechRecognizer.destroy();
+            } catch (Exception ignored) { }
+        }
+        speechRecognizer = null;
         isListening = false;
     }
 
     private void toggleListening() {
         listeningEnabled = !listeningEnabled;
+        listeningState = listeningEnabled;
+
         if (!listeningEnabled) {
             cancelListening();
-            updateOverlay("🎙 Escucha pausada");
-            speakDirect("Escucha pausada. El análisis de pantalla continúa.");
+            voiceStatus = "escucha pausada";
+            silentStatus("🎙 Escucha pausada.");
         } else {
-            updateOverlay("🎙 Escucha activa");
-            speakDirect("Escucha activada.");
+            if (speechRecognizer == null) createSpeechRecognizer();
+            voiceStatus = "activando escucha";
+            silentStatus("🎙 Escucha activa.");
+            startListeningSoon(250);
         }
     }
 
     private void handleVoiceCommand(String raw) {
         if (raw == null || raw.trim().isEmpty()) return;
         String command = normalize(raw);
-        updateOverlay("Oí: " + compact(raw, 80));
 
-        if (containsAny(command, "oculta la ventana", "oculta la burbuja", "ocultar ventana", "esconde la ventana", "quita la ventana")) {
-            UIControlService ui = UIControlService.getInstance();
-            if (ui != null) ui.hideOverlay();
-            speakDirect("Ventana oculta. El asistente sigue activo.");
+        if (containsAny(command,
+                "me escuchas", "puedes escucharme", "puedes oirme", "me oyes", "estas escuchando")) {
+            speakOnRequest("Sí, te escucho.");
             return;
         }
-        if (containsAny(command, "muestra la ventana", "muestra la burbuja", "mostrar ventana", "ensena la ventana")) {
+
+        if (containsAny(command,
+                "oculta la ventana", "oculta la burbuja", "ocultar ventana",
+                "esconde la ventana", "quita la ventana")) {
+            UIControlService ui = UIControlService.getInstance();
+            if (ui != null) ui.hideOverlay();
+            silentStatus("Mini ventana oculta.");
+            return;
+        }
+
+        if (containsAny(command,
+                "muestra la ventana", "muestra la burbuja", "mostrar ventana",
+                "ensena la ventana")) {
             UIControlService ui = UIControlService.getInstance();
             if (ui != null) {
                 ui.showOverlay();
-                speakDirect("Ventana visible.");
-            } else speakDirect("Activa Control de pantalla en Accesibilidad para usar la ventana flotante.");
-            return;
-        }
-        if (containsAny(command, "deten el monitoreo", "detener monitoreo", "deten el asistente", "para el asistente", "termina el asistente")) {
-            speakDirect("Deteniendo el asistente.");
-            mainHandler.postDelayed(this::stopSelf, 900);
-            return;
-        }
-        if (containsAny(command, "deja de escuchar", "desactiva escucha", "pausa escucha", "no me escuches")) {
-            listeningEnabled = false;
-            speakDirect("Dejo de escuchar. El análisis visual continúa.");
-            refreshForegroundNotification();
-            return;
-        }
-        if (containsAny(command, "silencio", "no hables", "sin voz", "desactiva avisos de voz")) {
-            autoSpeech = false;
-            speakDirect("Avisos automáticos por voz desactivados.");
-            return;
-        }
-        if (containsAny(command, "activa avisos de voz", "habla automaticamente", "activa la voz", "vuelve a hablar")) {
-            autoSpeech = true;
-            speakDirect("Avisos automáticos por voz activados.");
+                silentStatus("Mini ventana visible.");
+            } else {
+                silentStatus("Activa Control de pantalla en Accesibilidad.");
+            }
             return;
         }
 
-        String learnTopic = extractAfterAny(command,
-                "investiga y aprende ", "investiga sobre ", "aprende habilidad de ", "aprende la habilidad de ", "aprende sobre ", "aprende ");
+        if (containsAny(command,
+                "deten el monitoreo", "detener monitoreo", "deten el asistente",
+                "para el asistente", "termina el asistente")) {
+            silentStatus("Deteniendo el asistente.");
+            mainHandler.postDelayed(this::stopSelf, 350);
+            return;
+        }
+
+        if (containsAny(command,
+                "deja de escuchar", "desactiva escucha", "pausa escucha", "no me escuches")) {
+            listeningEnabled = false;
+            listeningState = false;
+            cancelListening();
+            voiceStatus = "escucha pausada";
+            silentStatus("Escucha pausada. El análisis visual continúa.");
+            refreshForegroundNotification();
+            return;
+        }
+
+        if (containsAny(command,
+                "silencio", "no hables", "sin voz", "no respondas con voz")) {
+            silentStatus("Modo silencioso activo. Solo hablaré cuando me hagas una pregunta.");
+            return;
+        }
+
+        String learnTopic = extractAfterAny(
+                command,
+                "investiga y aprende ",
+                "investiga sobre ",
+                "aprende habilidad de ",
+                "aprende la habilidad de ",
+                "aprende sobre ",
+                "aprende ");
+
         if (!learnTopic.isEmpty()) {
             learnSkill(learnTopic);
             return;
         }
-        if (containsAny(command, "que habilidades tienes", "cuales son tus habilidades", "lista tus habilidades")) {
+
+        if (containsAny(command,
+                "que habilidades tienes", "cuales son tus habilidades", "lista tus habilidades")) {
             String skills = skillManager.listSkillNames();
-            if (skills.isEmpty()) speakDirect("Todavía no tengo habilidades investigadas. Puedes decir: aprende pintura, por ejemplo.");
-            else speakDirect("Tengo estas habilidades guardadas: " + skills + ".");
+            speakOnRequest(skills.isEmpty()
+                    ? "Todavía no tengo habilidades investigadas."
+                    : "Tengo estas habilidades guardadas: " + skills + ".");
             return;
         }
-        String useSkill = extractAfterAny(command, "usa la habilidad ", "activa la habilidad ", "usa habilidad ");
+
+        String useSkill = extractAfterAny(command,
+                "usa la habilidad ", "activa la habilidad ", "usa habilidad ");
         if (!useSkill.isEmpty()) {
-            if (skillManager.setActiveSkill(useSkill)) speakDirect("Habilidad " + useSkill + " activada.");
-            else speakDirect("Aún no tengo esa habilidad. Puedes decir: aprende " + useSkill + ".");
+            if (skillManager.setActiveSkill(useSkill)) {
+                silentStatus("Habilidad activa: " + useSkill);
+            } else {
+                silentStatus("No tengo esa habilidad. Di: aprende " + useSkill);
+            }
             return;
         }
-        String forgetSkill = extractAfterAny(command, "olvida la habilidad ", "borra la habilidad ", "olvida habilidad ");
+
+        String forgetSkill = extractAfterAny(command,
+                "olvida la habilidad ", "borra la habilidad ", "olvida habilidad ");
         if (!forgetSkill.isEmpty()) {
-            if (skillManager.deleteSkill(forgetSkill)) speakDirect("Habilidad " + forgetSkill + " eliminada.");
-            else speakDirect("No encuentro esa habilidad guardada.");
+            silentStatus(skillManager.deleteSkill(forgetSkill)
+                    ? "Habilidad eliminada: " + forgetSkill
+                    : "No encuentro esa habilidad.");
             return;
         }
-        String learnedSkill = extractAfterAny(command, "que aprendiste de ", "que sabes de la habilidad ", "fuentes de ");
+
+        String learnedSkill = extractAfterAny(command,
+                "que aprendiste de ", "que sabes de la habilidad ", "fuentes de ");
         if (!learnedSkill.isEmpty()) {
             String notes = skillManager.getSkillNotes(learnedSkill);
-            if (notes.isEmpty()) speakDirect("No tengo esa habilidad guardada.");
-            else speakDirect("De " + learnedSkill + " tengo estas referencias: " + summarizeNotes(notes, 520));
+            speakOnRequest(notes.isEmpty()
+                    ? "No tengo esa habilidad guardada."
+                    : "De " + learnedSkill + " tengo estas referencias: "
+                    + summarizeNotes(notes, 520));
             return;
         }
 
-        if (containsAny(command, "que botones ves", "que controles ves", "que puedo pulsar", "que puedo tocar")) {
-            describeControls();
+        if (containsAny(command,
+                "que botones ves", "que controles ves", "que puedo pulsar", "que puedo tocar")) {
+            describeControls(true);
             return;
         }
 
-        String confirmTarget = extractAfterAny(command, "confirma pulsa ", "confirma toca ", "confirma presiona ");
+        String confirmTarget = extractAfterAny(command,
+                "confirma pulsa ", "confirma toca ", "confirma presiona ");
         if (!confirmTarget.isEmpty()) {
             if (!pendingDangerousTarget.isEmpty()
                     && SystemClock.elapsedRealtime() < pendingDangerousUntil
@@ -339,91 +561,124 @@ public class ScreenCaptureService extends Service {
                 performClick(confirmTarget, true);
                 pendingDangerousTarget = "";
                 pendingDangerousUntil = 0;
-            } else speakDirect("No hay una acción sensible pendiente con ese nombre.");
+            } else {
+                silentStatus("No hay una acción sensible pendiente con ese nombre.");
+            }
             return;
         }
 
-        String clickTarget = extractAfterAny(command, "haz clic en ", "pulsa el boton ", "pulsa ", "toca ", "presiona ", "oprime ");
+        String clickTarget = extractAfterAny(
+                command,
+                "haz clic en ",
+                "pulsa el boton ",
+                "pulsa ",
+                "toca ",
+                "presiona ",
+                "oprime ");
+
         if (!clickTarget.isEmpty()) {
             if (isSensitiveTarget(clickTarget)) {
                 pendingDangerousTarget = clickTarget;
                 pendingDangerousUntil = SystemClock.elapsedRealtime() + 15000;
-                speakDirect("Ese control puede producir una acción importante. Si quieres ejecutarla, di: confirma pulsa " + clickTarget + ".");
-            } else performClick(clickTarget, false);
+                silentStatus("Confirmación necesaria. Di: confirma pulsa " + clickTarget);
+            } else {
+                performClick(clickTarget, false);
+            }
             return;
         }
 
         String textToWrite = extractRawAfterAny(raw, "escribe ", "introduce ", "ingresa ");
         if (!textToWrite.isEmpty()) {
             UIControlService ui = UIControlService.getInstance();
-            if (ui == null) speakDirect("Activa Control de pantalla en Accesibilidad para escribir.");
-            else if (ui.setFocusedText(textToWrite)) speakDirect("Texto introducido.");
-            else speakDirect("No encuentro un campo de texto editable. Toca primero el campo y vuelve a decirme qué escribir.");
+            if (ui == null) {
+                silentStatus("Activa Control de pantalla para escribir.");
+            } else if (ui.setFocusedText(textToWrite)) {
+                silentStatus("Texto introducido.");
+            } else {
+                silentStatus("No encuentro un campo editable. Toca el campo y vuelve a intentarlo.");
+            }
             return;
         }
 
-        if (containsAny(command, "desplazate abajo", "desplaza hacia abajo", "desliza hacia abajo", "baja la pantalla", "scroll abajo")) {
+        if (containsAny(command,
+                "desplazate abajo", "desplaza hacia abajo", "desliza hacia abajo",
+                "baja la pantalla", "scroll abajo")) {
             performScroll(true);
             return;
         }
-        if (containsAny(command, "desplazate arriba", "desplaza hacia arriba", "desliza hacia arriba", "sube la pantalla", "scroll arriba")) {
+
+        if (containsAny(command,
+                "desplazate arriba", "desplaza hacia arriba", "desliza hacia arriba",
+                "sube la pantalla", "scroll arriba")) {
             performScroll(false);
             return;
         }
+
         if (containsAny(command, "ve atras", "regresa", "boton atras")) {
             UIControlService ui = UIControlService.getInstance();
-            if (ui != null && ui.back()) speakDirect("Listo."); else speakDirect("No pude ejecutar Atrás.");
+            silentStatus(ui != null && ui.back() ? "Atrás ejecutado." : "No pude ejecutar Atrás.");
             return;
         }
+
         if (containsAny(command, "ve al inicio", "pantalla de inicio", "ve a home")) {
             UIControlService ui = UIControlService.getInstance();
-            if (ui != null && ui.home()) speakDirect("Listo."); else speakDirect("No pude ir al inicio.");
+            silentStatus(ui != null && ui.home() ? "Inicio ejecutado." : "No pude ir al inicio.");
             return;
         }
-        if (containsAny(command, "abre recientes", "muestra recientes", "aplicaciones recientes")) {
+
+        if (containsAny(command,
+                "abre recientes", "muestra recientes", "aplicaciones recientes")) {
             UIControlService ui = UIControlService.getInstance();
-            if (ui != null && ui.recents()) speakDirect("Listo."); else speakDirect("No pude abrir recientes.");
+            silentStatus(ui != null && ui.recents()
+                    ? "Recientes abierto."
+                    : "No pude abrir recientes.");
             return;
         }
 
-        if (containsAny(command, "que ves", "describe la pantalla", "que hay en pantalla", "dime que ves", "describe esto")) {
-            speakDirect(describe(lastText));
+        if (containsAny(command,
+                "que ves", "describe la pantalla", "que hay en pantalla",
+                "dime que ves", "describe esto")) {
+            speakOnRequest(describe(lastText));
             return;
         }
+
         if (containsAny(command, "lee la pantalla", "lee esto", "leeme la pantalla")) {
-            if (lastText.isEmpty()) speakDirect("No detecto texto legible en este momento.");
-            else speakDirect("Leo en pantalla: " + compact(lastText, 520));
-            return;
-        }
-        if (containsAny(command, "que hago", "que debo hacer", "que me recomiendas", "aconsejame", "cual elijo", "que opcion")) {
-            speakDirect(adviceWithSkill(raw));
+            speakOnRequest(lastText.isEmpty()
+                    ? "No detecto texto legible en este momento."
+                    : "Leo en pantalla: " + compact(lastText, 520));
             return;
         }
 
-        speakDirect(answerGeneralRequest(raw));
+        if (containsAny(command,
+                "que hago", "que debo hacer", "que me recomiendas",
+                "aconsejame", "cual elijo", "que opcion")) {
+            speakOnRequest(adviceWithSkill(raw));
+            return;
+        }
+
+        // An unrecognized spoken phrase is still a user request.
+        speakOnRequest(answerGeneralRequest(raw));
     }
 
     private void learnSkill(String topic) {
         topic = topic.trim();
         if (topic.length() < 2) {
-            speakDirect("Dime qué habilidad quieres que investigue.");
+            silentStatus("No entendí qué habilidad quieres aprender.");
             return;
         }
+
         final String skill = topic;
-        updateOverlay("Investigando: " + compact(skill, 45));
-        speakDirect("Voy a investigar y guardar la habilidad " + skill + ".");
+        silentStatus("Investigando: " + compact(skill, 45));
+
         ResearchEngine.research(skill, new ResearchEngine.Callback() {
             @Override public void onSuccess(String notes, JSONArray sources) {
                 skillManager.saveSkill(skill, notes, sources);
-                String summary = summarizeNotes(notes, 430);
-                updateOverlay("Aprendida: " + skill + "\n" + compact(summary, 120));
-                speakDirect("Habilidad " + skill + " guardada. Encontré " + sources.length()
-                        + " referencias. Resumen: " + summary);
+                silentStatus("Habilidad aprendida: " + skill
+                        + " · " + sources.length() + " referencias.");
             }
 
             @Override public void onError(String message) {
-                updateOverlay("No pude aprender: " + skill);
-                speakDirect(message);
+                silentStatus("No pude aprender " + skill + ": " + message);
             }
         });
     }
@@ -431,30 +686,43 @@ public class ScreenCaptureService extends Service {
     private void performClick(String target, boolean confirmed) {
         UIControlService ui = UIControlService.getInstance();
         if (ui == null) {
-            speakDirect("Activa Control de pantalla en Accesibilidad para que pueda pulsar controles.");
+            silentStatus("Activa Control de pantalla en Accesibilidad.");
             return;
         }
-        if (ui.clickText(target)) speakDirect((confirmed ? "Confirmado. " : "") + "Pulsé " + target + ".");
-        else speakDirect("No encontré un control accesible llamado " + target + ". Puedes preguntarme qué botones veo.");
+
+        if (ui.clickText(target)) {
+            silentStatus((confirmed ? "Confirmado. " : "") + "Pulsé " + target + ".");
+        } else {
+            silentStatus("No encontré un control accesible llamado " + target + ".");
+        }
     }
 
     private void performScroll(boolean down) {
         UIControlService ui = UIControlService.getInstance();
-        if (ui == null) speakDirect("Activa Control de pantalla en Accesibilidad para desplazar la pantalla.");
-        else if (ui.scroll(down)) speakDirect("Listo.");
-        else speakDirect("Esta pantalla no expone un área desplazable.");
+        if (ui == null) {
+            silentStatus("Activa Control de pantalla en Accesibilidad.");
+        } else if (ui.scroll(down)) {
+            silentStatus(down ? "Desplacé hacia abajo." : "Desplacé hacia arriba.");
+        } else {
+            silentStatus("Esta pantalla no expone un área desplazable.");
+        }
     }
 
-    private void describeControls() {
+    private void describeControls(boolean speak) {
         UIControlService ui = UIControlService.getInstance();
-        if (ui == null) speakDirect("Activa Control de pantalla en Accesibilidad para leer y manejar botones.");
-        else speakDirect(ui.listInteractiveElements());
+        String result = ui == null
+                ? "Activa Control de pantalla en Accesibilidad para leer y manejar botones."
+                : ui.listInteractiveElements();
+
+        if (speak) speakOnRequest(result);
+        else silentStatus(result);
     }
 
     private void onImage(ImageReader imageReader) {
         long now = SystemClock.elapsedRealtime();
         Image image = imageReader.acquireLatestImage();
         if (image == null) return;
+
         if (now - lastProcess < 700) {
             image.close();
             return;
@@ -470,14 +738,14 @@ public class ScreenCaptureService extends Service {
                     bitmap.recycle();
                     String text = result.getText() == null ? "" : result.getText().trim();
                     if (!meaningfulChange(text)) return;
+
                     lastText = text;
                     lastAdvice = adviceWithSkill("");
-                    publishAdvice(describe(text), lastAdvice);
-                    updateOverlay(shortOverlay(lastAdvice));
-                    long t = SystemClock.elapsedRealtime();
-                    if (autoSpeech && t - lastAutoSpeak > 7000 && !isSpeaking) {
-                        lastAutoSpeak = t;
-                        speakDirect(lastAdvice);
+
+                    // Never speak automatically. Only refresh the unobtrusive overlay.
+                    UIControlService ui = UIControlService.getInstance();
+                    if (ui != null && ui.isOverlayVisible()) {
+                        ui.updateOverlay(shortOverlay(lastAdvice));
                     }
                 })
                 .addOnFailureListener(e -> bitmap.recycle());
@@ -490,12 +758,16 @@ public class ScreenCaptureService extends Service {
             int pixelStride = plane.getPixelStride();
             int rowStride = plane.getRowStride();
             int rowPadding = rowStride - pixelStride * image.getWidth();
+
             Bitmap padded = Bitmap.createBitmap(
                     image.getWidth() + rowPadding / pixelStride,
                     image.getHeight(),
                     Bitmap.Config.ARGB_8888);
             padded.copyPixelsFromBuffer(buffer);
-            Bitmap cropped = Bitmap.createBitmap(padded, 0, 0, image.getWidth(), image.getHeight());
+
+            Bitmap cropped =
+                    Bitmap.createBitmap(padded, 0, 0, image.getWidth(), image.getHeight());
+
             if (padded != cropped) padded.recycle();
             return cropped;
         } catch (Exception e) {
@@ -506,59 +778,113 @@ public class ScreenCaptureService extends Service {
     private boolean meaningfulChange(String text) {
         if (text.equals(lastText)) return false;
         if (lastText.isEmpty()) return true;
+
         int max = Math.max(text.length(), lastText.length());
         if (max == 0) return false;
+
         int min = Math.min(text.length(), lastText.length());
         int common = 0;
         while (common < min && text.charAt(common) == lastText.charAt(common)) common++;
+
         return 1f - ((float) common / max) > 0.10f;
     }
 
     private String describe(String text) {
-        if (text == null || text.isEmpty()) return "No detecto texto legible en este momento.";
+        if (text == null || text.isEmpty()) {
+            return "No detecto texto legible en este momento.";
+        }
         return "Veo en pantalla: " + compact(text, 300);
     }
 
     private String adviceWithSkill(String request) {
         String base = advise(lastText);
         String relevant = skillManager.findRelevantSkill(request == null ? "" : request);
+
         if (relevant == null || relevant.isEmpty()) return base;
+
         String notes = skillManager.getSkillNotes(relevant);
         if (notes.isEmpty()) return base;
-        return "Usando la habilidad " + relevant + ": " + summarizeNotes(notes, 300) + ". En esta pantalla: " + base;
+
+        return "Usando la habilidad " + relevant + ": "
+                + summarizeNotes(notes, 300)
+                + ". En esta pantalla: " + base;
     }
 
     private String advise(String text) {
         if (text == null) text = "";
         String t = normalize(text);
-        if (t.contains("error") || t.contains("failed") || t.contains("fallo"))
+
+        if (t.contains("error") || t.contains("failed") || t.contains("fallo")) {
             return "Apareció un error. Revisa el mensaje completo antes de continuar.";
-        if (t.contains("warning") || t.contains("advertencia") || t.contains("alerta"))
+        }
+        if (t.contains("warning") || t.contains("advertencia") || t.contains("alerta")) {
             return "Hay una advertencia visible. Conviene leerla antes de continuar.";
-        if (t.contains("continuar") || t.contains("continue") || t.contains("siguiente") || t.contains("next"))
+        }
+        if (t.contains("continuar") || t.contains("continue")
+                || t.contains("siguiente") || t.contains("next")) {
             return "Veo una opción para avanzar. Verifica que la información actual sea correcta antes de pulsarla.";
-        if (t.contains("cancelar") || t.contains("cancel"))
+        }
+        if (t.contains("cancelar") || t.contains("cancel")) {
             return "Hay una opción de cancelar si la acción actual no coincide con tu objetivo.";
-        if (text.isEmpty())
+        }
+        if (text.isEmpty()) {
             return "No tengo suficiente texto visible para recomendar una acción concreta.";
-        return "La pantalla cambió. Puedo describirla, decirte qué controles hay o pulsar un control si me indicas su nombre.";
+        }
+
+        return "La pantalla cambió. Puedo describirla, decirte qué controles hay "
+                + "o pulsar un control si me indicas su nombre.";
     }
 
     private String answerGeneralRequest(String request) {
         String skill = skillManager.findRelevantSkill(request);
         String skillNotes = skill == null ? "" : skillManager.getSkillNotes(skill);
-        String screen = lastText.isEmpty() ? "no detecto texto legible" : compact(lastText, 190);
+        String screen = lastText.isEmpty()
+                ? "no detecto texto legible"
+                : compact(lastText, 190);
+
         if (!skillNotes.isEmpty()) {
-            return "Entendí: " + request + ". Con la habilidad " + skill + " tengo esta referencia: "
-                    + summarizeNotes(skillNotes, 360) + ". En pantalla " + screen + ".";
+            return "Entendí: " + request + ". Con la habilidad " + skill
+                    + " tengo esta referencia: " + summarizeNotes(skillNotes, 360)
+                    + ". En pantalla " + screen + ".";
         }
-        return "Entendí: " + request + ". En pantalla " + screen + ". " + advise(lastText);
+
+        return "Entendí: " + request + ". En pantalla " + screen + ". "
+                + advise(lastText);
     }
 
-    private void speakDirect(String value) {
-        if (value == null || value.trim().isEmpty() || tts == null) return;
+    private void speakOnRequest(String value) {
+        if (value == null || value.trim().isEmpty()) return;
+        if (tts == null || !ttsReady) {
+            silentStatus("Entendí tu pregunta, pero la voz todavía se está preparando.");
+            startListeningSoon(500);
+            return;
+        }
+
         cancelListening();
-        tts.speak(value, TextToSpeech.QUEUE_FLUSH, null, "screen_observer_" + SystemClock.elapsedRealtime());
+        ignoreRecognitionUntil = Long.MAX_VALUE;
+
+        try {
+            int result = tts.speak(
+                    value,
+                    TextToSpeech.QUEUE_FLUSH,
+                    null,
+                    "screen_observer_" + SystemClock.elapsedRealtime());
+            if (result == TextToSpeech.ERROR) {
+                isSpeaking = false;
+                ignoreRecognitionUntil = SystemClock.elapsedRealtime() + 1200;
+                startListeningSoon(1200);
+            }
+        } catch (Exception e) {
+            isSpeaking = false;
+            ignoreRecognitionUntil = SystemClock.elapsedRealtime() + 1200;
+            startListeningSoon(1200);
+        }
+    }
+
+    private void silentStatus(String value) {
+        if (value == null) return;
+        updateOverlay(value);
+        voiceStatus = value.length() > 60 ? compact(value, 60) : value;
     }
 
     private void updateOverlay(String text) {
@@ -566,105 +892,145 @@ public class ScreenCaptureService extends Service {
         if (ui != null) ui.updateOverlay(text);
     }
 
-    private void publishAdvice(String description, String advice) {
-        String body = description + "\n\n" + advice;
-        Notification notification = new Notification.Builder(this, CHANNEL_ADVICE)
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setContentTitle("Screen Observer Pro — análisis")
-                .setContentText(compact(advice, 110))
-                .setStyle(new Notification.BigTextStyle().bigText(body))
-                .setAutoCancel(true)
-                .setPriority(Notification.PRIORITY_HIGH)
-                .build();
-        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-        nm.notify(ADVICE_ID, notification);
-    }
-
     private Notification buildForegroundNotification() {
-        PendingIntent toggleListen = serviceAction(ACTION_TOGGLE_LISTENING, 101);
-        PendingIntent show = serviceAction(ACTION_SHOW_OVERLAY, 102);
-        PendingIntent controls = serviceAction(ACTION_DESCRIBE_CONTROLS, 103);
+        Intent openIntent = new Intent(this, MainActivity.class);
+        PendingIntent openPending = PendingIntent.getActivity(
+                this,
+                101,
+                openIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-        return new Notification.Builder(this, CHANNEL_CAPTURE)
+        Intent listenIntent = new Intent(this, ScreenCaptureService.class);
+        listenIntent.setAction(ACTION_TOGGLE_LISTENING);
+        PendingIntent listenPending = PendingIntent.getService(
+                this,
+                102,
+                listenIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+        Intent overlayIntent = new Intent(this, ScreenCaptureService.class);
+        UIControlService ui = UIControlService.getInstance();
+        boolean overlayVisible = ui != null && ui.isOverlayVisible();
+        overlayIntent.setAction(overlayVisible ? ACTION_HIDE_OVERLAY : ACTION_SHOW_OVERLAY);
+        PendingIntent overlayPending = PendingIntent.getService(
+                this,
+                103,
+                overlayIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+        Notification.Builder builder =
+                Build.VERSION.SDK_INT >= 26
+                        ? new Notification.Builder(this, CHANNEL_CAPTURE)
+                        : new Notification.Builder(this);
+
+        builder.setContentTitle("Screen Observer Pro")
+                .setContentText(listeningEnabled
+                        ? "Pantalla activa · micrófono escuchando · voz solo bajo petición"
+                        : "Pantalla activa · escucha pausada")
                 .setSmallIcon(android.R.drawable.ic_menu_view)
-                .setContentTitle("Screen Observer Pro 1.3")
-                .setContentText(listeningEnabled ? "Pantalla + voz activas" : "Pantalla activa; escucha pausada")
+                .setContentIntent(openPending)
                 .setOngoing(true)
-                .addAction(new Notification.Action.Builder(0, listeningEnabled ? "Pausar voz" : "Activar voz", toggleListen).build())
-                .addAction(new Notification.Action.Builder(0, "Ventana", show).build())
-                .addAction(new Notification.Action.Builder(0, "Controles", controls).build())
-                .build();
-    }
+                .addAction(0, listeningEnabled ? "Pausar escucha" : "Activar escucha", listenPending)
+                .addAction(0, overlayVisible ? "Ocultar ventana" : "Mostrar ventana", overlayPending);
 
-    private PendingIntent serviceAction(String action, int requestCode) {
-        Intent intent = new Intent(this, ScreenCaptureService.class);
-        intent.setAction(action);
-        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
-        if (Build.VERSION.SDK_INT >= 23) flags |= PendingIntent.FLAG_IMMUTABLE;
-        return PendingIntent.getService(this, requestCode, intent, flags);
+        return builder.build();
     }
 
     private void refreshForegroundNotification() {
-        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-        nm.notify(FOREGROUND_ID, buildForegroundNotification());
+        if (!runningState) return;
+        NotificationManager nm =
+                (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (nm != null) nm.notify(FOREGROUND_ID, buildForegroundNotification());
     }
 
     private void createChannels() {
-        if (Build.VERSION.SDK_INT >= 26) {
-            NotificationManager nm = getSystemService(NotificationManager.class);
-            NotificationChannel capture = new NotificationChannel(
-                    CHANNEL_CAPTURE,
-                    "Asistente activo",
-                    NotificationManager.IMPORTANCE_LOW);
-            capture.setDescription("Mantiene activos captura, voz y habilidades");
-            nm.createNotificationChannel(capture);
+        if (Build.VERSION.SDK_INT < 26) return;
 
-            NotificationChannel advice = new NotificationChannel(
-                    CHANNEL_ADVICE,
-                    "Consejos de pantalla",
-                    NotificationManager.IMPORTANCE_HIGH);
-            advice.setDescription("Descripción y recomendaciones detectadas en pantalla");
-            nm.createNotificationChannel(advice);
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        if (nm == null) return;
+
+        NotificationChannel capture = new NotificationChannel(
+                CHANNEL_CAPTURE,
+                "Asistente de pantalla",
+                NotificationManager.IMPORTANCE_LOW);
+        capture.setDescription("Mantiene activo el análisis de pantalla y la escucha del asistente.");
+        nm.createNotificationChannel(capture);
+    }
+
+    private String speechErrorName(int error) {
+        switch (error) {
+            case SpeechRecognizer.ERROR_AUDIO:
+                return "error de audio; reintentando";
+            case SpeechRecognizer.ERROR_CLIENT:
+                return "reiniciando reconocedor";
+            case SpeechRecognizer.ERROR_NETWORK:
+                return "sin red para el motor de voz; reintentando";
+            case SpeechRecognizer.ERROR_NETWORK_TIMEOUT:
+                return "la red del motor de voz tardó demasiado";
+            case SpeechRecognizer.ERROR_RECOGNIZER_BUSY:
+                return "reconocedor ocupado; reiniciando";
+            case SpeechRecognizer.ERROR_SERVER:
+                return "motor de voz temporalmente no disponible";
+            case SpeechRecognizer.ERROR_SERVER_DISCONNECTED:
+                return "motor de voz desconectado; reiniciando";
+            case SpeechRecognizer.ERROR_TOO_MANY_REQUESTS:
+                return "motor de voz limitó solicitudes; reintentando";
+            case SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED:
+                return "español no admitido por el motor de voz";
+            case SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE:
+                return "modelo de español no disponible; usando reconocimiento normal";
+            default:
+                return "reintentando escucha";
         }
     }
 
     private boolean isSensitiveTarget(String target) {
         String t = normalize(target);
-        return containsAny(t,
-                "pagar", "comprar", "transferir", "enviar dinero", "confirmar compra",
-                "eliminar cuenta", "borrar cuenta", "borrar datos", "desinstalar", "restablecer", "factory reset");
+        return containsAny(
+                t,
+                "pagar",
+                "pago",
+                "comprar",
+                "compra",
+                "transferir",
+                "transferencia",
+                "enviar dinero",
+                "borrar",
+                "eliminar cuenta",
+                "eliminar todo",
+                "restablecer",
+                "formatear");
     }
 
-    private String summarizeNotes(String notes, int max) {
-        if (notes == null || notes.isEmpty()) return "sin notas todavía";
-        String clean = notes.replaceAll("\\[[^]]+\\]", " ")
-                .replace('\n', ' ')
-                .replaceAll("\\s+", " ")
-                .trim();
-        if (clean.length() <= max) return clean;
-        int cut = clean.lastIndexOf('.', max);
-        if (cut < max / 2) cut = max;
-        return clean.substring(0, cut).trim() + "…";
+    private static String shortOverlay(String value) {
+        if (value == null || value.isEmpty()) return "Pantalla actualizada.";
+        return compact(value, 145);
     }
 
-    private String shortOverlay(String value) {
-        String active = skillManager.getActiveSkillName();
-        String prefix = active.isEmpty() ? "" : "Habilidad: " + active + "\n";
-        return prefix + compact(value, 150);
+    private static String summarizeNotes(String value, int max) {
+        if (value == null) return "";
+        String compact = value.replace('\n', ' ').replaceAll("\\s+", " ").trim();
+        if (compact.length() > max) compact = compact.substring(0, max) + "…";
+        return compact;
     }
 
     private static String compact(String value, int max) {
         if (value == null) return "";
         String compact = value.replace('\n', ' ').replaceAll("\\s+", " ").trim();
-        return compact.length() > max ? compact.substring(0, max) + "…" : compact;
+        if (compact.length() > max) compact = compact.substring(0, max) + "…";
+        return compact;
     }
 
     private static boolean containsAny(String value, String... options) {
-        for (String option : options) if (value.contains(option)) return true;
+        if (value == null) return false;
+        for (String option : options) {
+            if (value.contains(option)) return true;
+        }
         return false;
     }
 
     private static String extractAfterAny(String value, String... prefixes) {
+        if (value == null) return "";
         for (String prefix : prefixes) {
             int index = value.indexOf(prefix);
             if (index >= 0) {
@@ -676,39 +1042,69 @@ public class ScreenCaptureService extends Service {
     }
 
     private static String extractRawAfterAny(String raw, String... prefixes) {
-        String lower = raw.toLowerCase(Locale.ROOT);
+        if (raw == null) return "";
+        String normalizedRaw = normalize(raw);
+
         for (String prefix : prefixes) {
-            int index = lower.indexOf(prefix.toLowerCase(Locale.ROOT));
-            if (index >= 0) {
-                String result = raw.substring(index + prefix.length()).trim();
-                if (!result.isEmpty()) return result;
-            }
+            String normalizedPrefix = normalize(prefix);
+            if (!normalizedRaw.startsWith(normalizedPrefix)) continue;
+
+            String[] words = raw.trim().split("\\s+", 2);
+            if (words.length == 2) return words[1].trim();
         }
         return "";
     }
 
     private static String normalize(String value) {
         if (value == null) return "";
-        String normalized = Normalizer.normalize(value.toLowerCase(Locale.ROOT), Normalizer.Form.NFD)
+        String n = Normalizer.normalize(
+                        value.toLowerCase(Locale.ROOT),
+                        Normalizer.Form.NFD)
                 .replaceAll("\\p{M}+", "");
-        return normalized.replaceAll("[^a-z0-9ñ ]", " ").replaceAll("\\s+", " ").trim();
+        return n.replaceAll("[^a-z0-9ñ ]", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
     }
 
     @Override public void onDestroy() {
+        runningState = false;
+        listeningState = false;
+        voiceStatus = "detenido";
+
         mainHandler.removeCallbacksAndMessages(null);
         cancelListening();
-        if (speechRecognizer != null) {
-            try { speechRecognizer.destroy(); } catch (Exception ignored) { }
+        destroySpeechRecognizer();
+
+        if (reader != null) {
+            try {
+                reader.close();
+            } catch (Exception ignored) { }
+            reader = null;
         }
-        if (reader != null) reader.close();
+
         if (projection != null) {
-            try { projection.stop(); } catch (Exception ignored) { }
+            try {
+                projection.stop();
+            } catch (Exception ignored) { }
+            projection = null;
         }
-        if (textRecognizer != null) textRecognizer.close();
+
+        if (textRecognizer != null) {
+            try {
+                textRecognizer.close();
+            } catch (Exception ignored) { }
+        }
+
         if (tts != null) {
-            tts.stop();
-            tts.shutdown();
+            try {
+                tts.stop();
+                tts.shutdown();
+            } catch (Exception ignored) { }
         }
+
+        UIControlService ui = UIControlService.getInstance();
+        if (ui != null) ui.updateOverlay("Asistente detenido.");
+
         super.onDestroy();
     }
 
