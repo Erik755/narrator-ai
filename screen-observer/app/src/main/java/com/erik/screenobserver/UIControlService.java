@@ -45,7 +45,7 @@ public class UIControlService extends AccessibilityService {
         super.onServiceConnected();
         instance = this;
         boolean wanted = getSharedPreferences("screen_observer", MODE_PRIVATE)
-                .getBoolean("overlay_enabled", true);
+                .getBoolean("overlay_enabled", false);
         if (wanted) showOverlay();
     }
 
@@ -192,7 +192,7 @@ public class UIControlService extends AccessibilityService {
         title.setTextColor(Color.WHITE);
         title.setTextSize(12);
         title.setSingleLine(true);
-        header.addView(title, new LinearLayout.LayoutParams(0, dp(30), 1f));
+        header.addView(title, new LinearLayout.LayoutParams(0, dp(28), 1f));
 
         Button close = new Button(this);
         close.setText("×");
@@ -201,19 +201,19 @@ public class UIControlService extends AccessibilityService {
         close.setMinHeight(0);
         close.setPadding(0, 0, 0, 0);
         close.setOnClickListener(v -> hideOverlay());
-        header.addView(close, new LinearLayout.LayoutParams(dp(34), dp(30)));
+        header.addView(close, new LinearLayout.LayoutParams(dp(32), dp(28)));
         root.addView(header);
 
         TextView body = new TextView(this);
         body.setText("Listo. Puedes mover esta ventana.");
         body.setTextColor(Color.WHITE);
-        body.setTextSize(12);
-        body.setMaxLines(4);
+        body.setTextSize(11);
+        body.setMaxLines(3);
         body.setEllipsize(TextUtils.TruncateAt.END);
-        root.addView(body, new LinearLayout.LayoutParams(dp(196), WindowManager.LayoutParams.WRAP_CONTENT));
+        root.addView(body, new LinearLayout.LayoutParams(dp(172), WindowManager.LayoutParams.WRAP_CONTENT));
 
         overlayParams = new WindowManager.LayoutParams(
-                dp(212),
+                dp(188),
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
