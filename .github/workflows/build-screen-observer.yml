@@ -2,7 +2,7 @@ name: Build Screen Observer APK
 
 on:
   push:
-    branches: [screen-observer-pro]
+    branches: [master, screen-observer-pro]
     paths:
       - 'screen-observer/**'
       - '.github/workflows/build-screen-observer.yml'
