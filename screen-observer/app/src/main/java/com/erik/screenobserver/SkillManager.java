@@ -1,0 +1,166 @@
+package com.erik.screenobserver;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.text.Normalizer;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Locale;
+
+public class SkillManager {
+    private static final String PREFS = "screen_observer_skills";
+    private static final String KEY_SKILLS = "skills_json";
+    private static final String KEY_ACTIVE = "active_skill";
+
+    private final SharedPreferences prefs;
+
+    public SkillManager(Context context) {
+        prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    }
+
+    public synchronized void saveSkill(String name, String notes, JSONArray sources) {
+        if (name == null || name.trim().isEmpty()) return;
+        try {
+            JSONObject all = readAll();
+            JSONObject skill = new JSONObject();
+            skill.put("name", name.trim());
+            skill.put("notes", notes == null ? "" : notes);
+            skill.put("sources", sources == null ? new JSONArray() : sources);
+            skill.put("updatedAt", System.currentTimeMillis());
+            all.put(key(name), skill);
+            prefs.edit()
+                    .putString(KEY_SKILLS, all.toString())
+                    .putString(KEY_ACTIVE, key(name))
+                    .apply();
+        } catch (Exception ignored) { }
+    }
+
+    public synchronized boolean hasSkill(String name) {
+        if (name == null) return false;
+        return readAll().has(key(name));
+    }
+
+    public synchronized boolean setActiveSkill(String name) {
+        String k = key(name);
+        if (!readAll().has(k)) return false;
+        prefs.edit().putString(KEY_ACTIVE, k).apply();
+        return true;
+    }
+
+    public synchronized String getActiveSkillName() {
+        try {
+            String k = prefs.getString(KEY_ACTIVE, "");
+            JSONObject skill = readAll().optJSONObject(k);
+            return skill == null ? "" : skill.optString("name", "");
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    public synchronized String getActiveSkillNotes() {
+        String name = getActiveSkillName();
+        return getSkillNotes(name);
+    }
+
+    public synchronized String getSkillNotes(String name) {
+        if (name == null || name.trim().isEmpty()) return "";
+        JSONObject skill = readAll().optJSONObject(key(name));
+        return skill == null ? "" : skill.optString("notes", "");
+    }
+
+    public synchronized String getSkillSources(String name) {
+        if (name == null || name.trim().isEmpty()) return "";
+        JSONObject skill = readAll().optJSONObject(key(name));
+        if (skill == null) return "";
+        JSONArray sources = skill.optJSONArray("sources");
+        if (sources == null || sources.length() == 0) return "";
+        List<String> out = new ArrayList<>();
+        for (int i = 0; i < sources.length(); i++) {
+            JSONObject source = sources.optJSONObject(i);
+            if (source != null) {
+                String title = source.optString("title", "");
+                String site = source.optString("site", "");
+                if (!title.isEmpty()) out.add(title + (site.isEmpty() ? "" : " — " + site));
+            }
+        }
+        return join(out, "; ");
+    }
+
+    public synchronized String listSkillNames() {
+        JSONObject all = readAll();
+        List<String> names = new ArrayList<>();
+        Iterator<String> it = all.keys();
+        while (it.hasNext()) {
+            JSONObject skill = all.optJSONObject(it.next());
+            if (skill != null) {
+                String name = skill.optString("name", "");
+                if (!name.isEmpty()) names.add(name);
+            }
+        }
+        return join(names, ", ");
+    }
+
+    public synchronized boolean deleteSkill(String name) {
+        try {
+            JSONObject all = readAll();
+            String k = key(name);
+            if (!all.has(k)) return false;
+            all.remove(k);
+            SharedPreferences.Editor editor = prefs.edit().putString(KEY_SKILLS, all.toString());
+            if (k.equals(prefs.getString(KEY_ACTIVE, ""))) editor.remove(KEY_ACTIVE);
+            editor.apply();
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    public synchronized String findRelevantSkill(String request) {
+        String normalized = normalize(request);
+        if (normalized.isEmpty()) return getActiveSkillName();
+        JSONObject all = readAll();
+        Iterator<String> it = all.keys();
+        while (it.hasNext()) {
+            JSONObject skill = all.optJSONObject(it.next());
+            if (skill == null) continue;
+            String name = skill.optString("name", "");
+            String n = normalize(name);
+            if (!n.isEmpty() && (normalized.contains(n) || n.contains(normalized))) return name;
+        }
+        return getActiveSkillName();
+    }
+
+    private JSONObject readAll() {
+        try {
+            String raw = prefs.getString(KEY_SKILLS, "{}");
+            return new JSONObject(raw == null ? "{}" : raw);
+        } catch (Exception e) {
+            return new JSONObject();
+        }
+    }
+
+    private static String key(String value) {
+        return normalize(value).replace(' ', '_');
+    }
+
+    private static String normalize(String value) {
+        if (value == null) return "";
+        String n = Normalizer.normalize(value.toLowerCase(Locale.ROOT), Normalizer.Form.NFD)
+                .replaceAll("\\p{M}+", "");
+        return n.replaceAll("[^a-z0-9ñ ]", " ").replaceAll("\\s+", " ").trim();
+    }
+
+    private static String join(List<String> values, String separator) {
+        StringBuilder b = new StringBuilder();
+        for (String value : values) {
+            if (b.length() > 0) b.append(separator);
+            b.append(value);
+        }
+        return b.toString();
+    }
+}
