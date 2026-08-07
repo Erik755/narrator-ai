@@ -2,12 +2,17 @@ package com.erik.screenobserver;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.media.projection.MediaProjectionManager;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.widget.Button;
@@ -17,10 +22,34 @@ import android.widget.TextView;
 public class MainActivity extends Activity {
     private static final int REQ_CAPTURE = 1001;
     private static final int REQ_MIC = 2002;
+
+    private static final int GREEN = Color.rgb(46, 125, 50);
+    private static final int RED = Color.rgb(198, 40, 40);
+    private static final int ORANGE = Color.rgb(239, 108, 0);
+    private static final int BLUE = Color.rgb(21, 101, 192);
+    private static final int GRAY = Color.rgb(189, 189, 189);
+    private static final int DARK_GRAY = Color.rgb(97, 97, 97);
+
     private MediaProjectionManager projectionManager;
     private TextView status;
     private TextView accessStatus;
+    private Button accessibilityButton;
+    private Button startButton;
+    private Button overlayButton;
+    private Button listenButton;
+    private Button controlsButton;
+    private Button stopButton;
+
     private boolean pendingCaptureAfterMic = false;
+    private boolean resumed = false;
+    private final Handler uiHandler = new Handler(Looper.getMainLooper());
+
+    private final Runnable refreshRunnable = new Runnable() {
+        @Override public void run() {
+            refreshUi();
+            if (resumed) uiHandler.postDelayed(this, 600);
+        }
+    };
 
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -28,95 +57,205 @@ public class MainActivity extends Activity {
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(36, 52, 36, 36);
+        root.setPadding(36, 48, 36, 36);
         root.setGravity(Gravity.CENTER_HORIZONTAL);
 
         TextView title = new TextView(this);
-        title.setText("Screen Observer Pro 1.3");
+        title.setText("Screen Observer Pro 1.4");
         title.setTextSize(27);
         title.setTextColor(Color.BLACK);
         root.addView(title);
 
         TextView info = new TextView(this);
-        info.setText("Asistente de pantalla con voz, memoria de habilidades e interacción mediante Accesibilidad. Aprende temas bajo demanda usando fuentes gratuitas de Wikimedia y conserva lo aprendido en el teléfono.");
+        info.setText("Asistente de pantalla con voz, habilidades y control mediante Accesibilidad. "
+                + "La voz automática está desactivada: solo habla cuando le haces una pregunta.");
         info.setTextSize(15);
-        info.setPadding(0, 20, 0, 18);
+        info.setPadding(0, 18, 0, 16);
         root.addView(info);
 
-        Button accessibility = new Button(this);
-        accessibility.setText("1. Activar Control de pantalla (Accesibilidad)");
-        accessibility.setOnClickListener(v -> {
-            startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
-            status.setText("Estado: activa “Screen Observer Pro — Control de pantalla” y regresa");
-        });
-        root.addView(accessibility);
+        accessibilityButton = new Button(this);
+        accessibilityButton.setOnClickListener(v -> openAccessibilityControl());
+        root.addView(accessibilityButton);
 
         accessStatus = new TextView(this);
         accessStatus.setPadding(0, 6, 0, 14);
         root.addView(accessStatus);
 
-        Button start = new Button(this);
-        start.setText("2. Iniciar monitoreo + escucha");
-        start.setOnClickListener(v -> startWithPermissions());
-        root.addView(start);
+        startButton = new Button(this);
+        startButton.setOnClickListener(v -> startWithPermissions());
+        root.addView(startButton);
 
-        Button showOverlay = new Button(this);
-        showOverlay.setText("Mostrar mini ventana");
-        showOverlay.setOnClickListener(v -> sendServiceAction(ScreenCaptureService.ACTION_SHOW_OVERLAY));
-        root.addView(showOverlay);
+        overlayButton = new Button(this);
+        overlayButton.setOnClickListener(v -> toggleOverlay());
+        root.addView(overlayButton);
 
-        Button hideOverlay = new Button(this);
-        hideOverlay.setText("Ocultar mini ventana");
-        hideOverlay.setOnClickListener(v -> sendServiceAction(ScreenCaptureService.ACTION_HIDE_OVERLAY));
-        root.addView(hideOverlay);
+        listenButton = new Button(this);
+        listenButton.setOnClickListener(v -> sendServiceAction(ScreenCaptureService.ACTION_TOGGLE_LISTENING));
+        root.addView(listenButton);
 
-        Button listen = new Button(this);
-        listen.setText("Activar / desactivar escucha");
-        listen.setOnClickListener(v -> sendServiceAction(ScreenCaptureService.ACTION_TOGGLE_LISTENING));
-        root.addView(listen);
+        controlsButton = new Button(this);
+        controlsButton.setText("DECIRME QUÉ CONTROLES VE");
+        controlsButton.setOnClickListener(v -> sendServiceAction(ScreenCaptureService.ACTION_DESCRIBE_CONTROLS));
+        root.addView(controlsButton);
 
-        Button controls = new Button(this);
-        controls.setText("Decirme qué controles ve");
-        controls.setOnClickListener(v -> sendServiceAction(ScreenCaptureService.ACTION_DESCRIBE_CONTROLS));
-        root.addView(controls);
-
-        Button stop = new Button(this);
-        stop.setText("Detener asistente");
-        stop.setOnClickListener(v -> {
+        stopButton = new Button(this);
+        stopButton.setOnClickListener(v -> {
             stopService(new Intent(this, ScreenCaptureService.class));
             status.setText("Estado: detenido");
+            uiHandler.postDelayed(this::refreshUi, 250);
         });
-        root.addView(stop);
+        root.addView(stopButton);
 
         status = new TextView(this);
         status.setText("Estado: detenido");
-        status.setPadding(0, 22, 0, 0);
+        status.setPadding(0, 20, 0, 0);
         root.addView(status);
 
+        TextView route = new TextView(this);
+        route.setText("Motorola / Android 16: el primer botón intenta abrir directamente el detalle de "
+                + "“Screen Observer Pro — Control de pantalla”. Si Motorola no admite ese acceso directo, "
+                + "abre Accesibilidad para seleccionarlo manualmente. Si aparece “Ajuste restringido”, "
+                + "abre Información de la app y usa ⋮ → Permitir ajustes restringidos.");
+        route.setTextSize(13);
+        route.setPadding(0, 18, 0, 0);
+        root.addView(route);
+
+        Button appInfo = new Button(this);
+        appInfo.setText("ABRIR INFORMACIÓN DE LA APP");
+        appInfo.setOnClickListener(v -> {
+            Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:" + getPackageName()));
+            startActivity(intent);
+        });
+        root.addView(appInfo);
+
         TextView hints = new TextView(this);
-        hints.setText("Ejemplos por voz:\n• “Aprende pintura” o “investiga soldadura TIG”.\n• “¿Qué habilidades tienes?” / “usa la habilidad pintura”.\n• “¿Qué ves?” / “¿qué botones ves?”.\n• “Pulsa Continuar”, “toca Aceptar”, “escribe hola”, “desplázate abajo”, “ve atrás”.\n• “Oculta la ventana” / “muestra la ventana”.");
+        hints.setText("Prueba de voz: di “¿me escuchas?”.\n"
+                + "También: “¿qué ves?”, “¿qué botones ves?”, “aprende pintura”, "
+                + "“pulsa Continuar”, “escribe hola”, “desplázate abajo” o “ve atrás”.");
         hints.setTextSize(13);
-        hints.setPadding(0, 20, 0, 0);
+        hints.setPadding(0, 18, 0, 0);
         root.addView(hints);
 
         setContentView(root);
 
-        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 2001);
         }
-        updateAccessStatus();
+
+        refreshUi();
     }
 
     @Override protected void onResume() {
         super.onResume();
-        updateAccessStatus();
+        resumed = true;
+        uiHandler.removeCallbacks(refreshRunnable);
+        uiHandler.post(refreshRunnable);
     }
 
-    private void updateAccessStatus() {
-        if (accessStatus == null) return;
-        accessStatus.setText(UIControlService.isRunning()
-                ? "Control de pantalla: ACTIVO"
-                : "Control de pantalla: pendiente. Es necesario para pulsar, escribir, desplazar y mostrar la mini ventana sin permiso de superposición.");
+    @Override protected void onPause() {
+        resumed = false;
+        uiHandler.removeCallbacks(refreshRunnable);
+        super.onPause();
+    }
+
+    private void openAccessibilityControl() {
+        ComponentName component = new ComponentName(this, UIControlService.class);
+        Intent detail = new Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS");
+        detail.putExtra(Intent.EXTRA_COMPONENT_NAME, component);
+
+        try {
+            if (detail.resolveActivity(getPackageManager()) != null) {
+                startActivity(detail);
+            } else {
+                startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+            }
+        } catch (Exception e) {
+            try {
+                startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+            } catch (Exception ignored) {
+                status.setText("No pude abrir Accesibilidad. Ábrela desde Ajustes.");
+            }
+        }
+
+        status.setText("Activa “Screen Observer Pro — Control de pantalla” y regresa.");
+    }
+
+    private void toggleOverlay() {
+        if (!ScreenCaptureService.isRunning()) {
+            status.setText("Estado: inicia primero el monitoreo.");
+            return;
+        }
+        UIControlService ui = UIControlService.getInstance();
+        if (ui == null) {
+            status.setText("Activa primero Control de pantalla en Accesibilidad.");
+            openAccessibilityControl();
+            return;
+        }
+        sendServiceAction(ui.isOverlayVisible()
+                ? ScreenCaptureService.ACTION_HIDE_OVERLAY
+                : ScreenCaptureService.ACTION_SHOW_OVERLAY);
+    }
+
+    private void refreshUi() {
+        if (status == null) return;
+
+        boolean access = UIControlService.isRunning();
+        boolean running = ScreenCaptureService.isRunning();
+        boolean listening = ScreenCaptureService.isListeningEnabled();
+        UIControlService ui = UIControlService.getInstance();
+        boolean overlay = ui != null && ui.isOverlayVisible();
+
+        style(accessibilityButton,
+                access ? "1. CONTROL DE PANTALLA: ACTIVO" : "1. ACTIVAR CONTROL DE PANTALLA",
+                access ? GREEN : RED,
+                true);
+
+        accessStatus.setText(access
+                ? "Control de pantalla: activo."
+                : "Control de pantalla: pendiente. Necesario para pulsar, escribir y desplazar.");
+
+        style(startButton,
+                running ? "2. MONITOREO: ACTIVO" : "2. INICIAR MONITOREO + ESCUCHA",
+                running ? GREEN : BLUE,
+                !running);
+
+        style(overlayButton,
+                overlay ? "MINI VENTANA: VISIBLE · TOCAR PARA OCULTAR"
+                        : "MINI VENTANA: OCULTA · TOCAR PARA MOSTRAR",
+                overlay ? GREEN : DARK_GRAY,
+                running);
+
+        style(listenButton,
+                listening ? "ESCUCHA: ACTIVA · TOCAR PARA PAUSAR"
+                        : "ESCUCHA: PAUSADA · TOCAR PARA ACTIVAR",
+                listening ? GREEN : ORANGE,
+                running);
+
+        style(controlsButton, "DECIRME QUÉ CONTROLES VE",
+                access && running ? BLUE : GRAY,
+                access && running);
+
+        style(stopButton, running ? "DETENER ASISTENTE" : "ASISTENTE DETENIDO",
+                running ? RED : GRAY,
+                running);
+
+        if (running) {
+            status.setText("Estado: activo · " + ScreenCaptureService.getVoiceStatus());
+        } else if (!status.getText().toString().contains("permiso")
+                && !status.getText().toString().contains("Activa")
+                && !status.getText().toString().contains("pude")) {
+            status.setText("Estado: detenido");
+        }
+    }
+
+    private void style(Button button, String text, int background, boolean enabled) {
+        if (button == null) return;
+        button.setText(text);
+        button.setEnabled(enabled);
+        button.setBackgroundTintList(ColorStateList.valueOf(background));
+        button.setTextColor(background == GRAY ? Color.BLACK : Color.WHITE);
     }
 
     private void startWithPermissions() {
@@ -130,7 +269,7 @@ public class MainActivity extends Activity {
     }
 
     private void startCapture() {
-        status.setText("Estado: solicitando permiso de captura...");
+        status.setText("Estado: solicitando permiso para ver la pantalla...");
         startActivityForResult(projectionManager.createScreenCaptureIntent(), REQ_CAPTURE);
     }
 
@@ -139,21 +278,24 @@ public class MainActivity extends Activity {
         intent.setAction(action);
         try {
             startService(intent);
-        } catch (Exception ignored) {
-            status.setText("Estado: inicia primero el asistente");
+            uiHandler.postDelayed(this::refreshUi, 250);
+        } catch (Exception e) {
+            status.setText("Estado: inicia primero el asistente.");
         }
     }
 
-    @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+    @Override public void onRequestPermissionsResult(
+            int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == REQ_MIC) {
-            boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+            boolean granted = grantResults.length > 0
+                    && grantResults[0] == PackageManager.PERMISSION_GRANTED;
             if (granted && pendingCaptureAfterMic) {
                 pendingCaptureAfterMic = false;
                 startCapture();
             } else {
                 pendingCaptureAfterMic = false;
-                status.setText("Estado: el micrófono es necesario para recibir órdenes por voz");
+                status.setText("Estado: sin permiso de micrófono no puedo escuchar órdenes.");
             }
         }
     }
@@ -164,11 +306,13 @@ public class MainActivity extends Activity {
             Intent service = new Intent(this, ScreenCaptureService.class);
             service.putExtra("resultCode", resultCode);
             service.putExtra("data", data);
-            if (Build.VERSION.SDK_INT >= 26) startForegroundService(service); else startService(service);
-            status.setText("Estado: asistente activo");
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(service);
+            else startService(service);
+            status.setText("Estado: iniciando asistente...");
+            uiHandler.postDelayed(this::refreshUi, 600);
             moveTaskToBack(true);
         } else if (requestCode == REQ_CAPTURE) {
-            status.setText("Estado: permiso de captura rechazado");
+            status.setText("Estado: permiso de captura rechazado.");
         }
     }
 }
