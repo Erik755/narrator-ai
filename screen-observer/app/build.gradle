@@ -2,14 +2,14 @@ plugins { id 'com.android.application' }
 
 android {
     namespace 'com.erik.screenobserver'
-    compileSdk 35
+    compileSdk 36
 
     defaultConfig {
         applicationId 'com.erik.screenobserver'
         minSdk 26
-        targetSdk 35
-        versionCode 8
-        versionName '2.1.0'
+        targetSdk 36
+        versionCode 9
+        versionName '2.2.0'
     }
 }
 
