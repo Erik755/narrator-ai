@@ -21,6 +21,25 @@ public class SkillManager {
 
     public SkillManager(Context context) {
         prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        ensureBuiltInSkills();
+    }
+
+    /** Adds built-ins without replacing the user's current active skill. */
+    private synchronized void ensureBuiltInSkills() {
+        try {
+            JSONObject all = readAll();
+            String k = key(AndroidSkillPack.SKILL_NAME);
+            if (!all.has(k)) {
+                JSONObject skill = new JSONObject();
+                skill.put("name", AndroidSkillPack.SKILL_NAME);
+                skill.put("notes", AndroidSkillPack.builtInNotes());
+                skill.put("sources", new JSONArray());
+                skill.put("updatedAt", System.currentTimeMillis());
+                skill.put("builtin", true);
+                all.put(k, skill);
+                prefs.edit().putString(KEY_SKILLS, all.toString()).apply();
+            }
+        } catch (Exception ignored) { }
     }
 
     public synchronized void saveSkill(String name, String notes, JSONArray sources) {
@@ -63,8 +82,7 @@ public class SkillManager {
     }
 
     public synchronized String getActiveSkillNotes() {
-        String name = getActiveSkillName();
-        return getSkillNotes(name);
+        return getSkillNotes(getActiveSkillName());
     }
 
     public synchronized String getSkillNotes(String name) {
@@ -107,9 +125,10 @@ public class SkillManager {
 
     public synchronized boolean deleteSkill(String name) {
         try {
-            JSONObject all = readAll();
             String k = key(name);
-            if (!all.has(k)) return false;
+            JSONObject all = readAll();
+            JSONObject existing = all.optJSONObject(k);
+            if (existing == null || existing.optBoolean("builtin", false)) return false;
             all.remove(k);
             SharedPreferences.Editor editor = prefs.edit().putString(KEY_SKILLS, all.toString());
             if (k.equals(prefs.getString(KEY_ACTIVE, ""))) editor.remove(KEY_ACTIVE);
@@ -131,6 +150,10 @@ public class SkillManager {
             String name = skill.optString("name", "");
             String n = normalize(name);
             if (!n.isEmpty() && (normalized.contains(n) || n.contains(normalized))) return name;
+        }
+        if (normalized.contains("android") || normalized.contains("telefono") || normalized.contains("celular")
+                || normalized.contains("pantalla") || normalized.contains("aplicacion") || normalized.contains("app")) {
+            return AndroidSkillPack.SKILL_NAME;
         }
         return getActiveSkillName();
     }
