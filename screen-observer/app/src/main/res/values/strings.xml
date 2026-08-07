@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Screen Observer Pro</string>
+    <string name="accessibility_service_name">Screen Observer Pro — Control de pantalla</string>
     <string name="accessibility_desc">Permite que Screen Observer Pro lea controles visibles y ejecute pulsaciones, escritura y desplazamiento cuando el usuario lo solicita por voz. También permite mostrar una mini ventana movible sin usar el permiso de superposición.</string>
 </resources>
