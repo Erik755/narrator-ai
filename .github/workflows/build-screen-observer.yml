@@ -35,6 +35,7 @@ jobs:
           javac -d build/local-tests \
             app/src/main/java/com/erik/screenobserver/IntentAgent.java \
             app/src/main/java/com/erik/screenobserver/AndroidSkillPack.java \
+            app/src/main/java/com/erik/screenobserver/CaptureGeometry.java \
             local-tests/AgentUnderstandingTest.java
           java -cp build/local-tests AgentUnderstandingTest
       - name: Build debug APK
