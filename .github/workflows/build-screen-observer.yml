@@ -1,0 +1,40 @@
+name: Build Screen Observer APK
+
+on:
+  push:
+    branches: [master, screen-observer-pro]
+    paths:
+      - 'screen-observer/**'
+      - '.github/workflows/build-screen-observer.yml'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'screen-observer/**'
+      - '.github/workflows/build-screen-observer.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Build debug APK
+        working-directory: screen-observer
+        run: gradle --no-daemon assembleDebug
+      - name: Rename APK
+        run: cp screen-observer/app/build/outputs/apk/debug/app-debug.apk Screen-Observer-Pro.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Screen-Observer-Pro-APK
+          path: Screen-Observer-Pro.apk
+          if-no-files-found: error
