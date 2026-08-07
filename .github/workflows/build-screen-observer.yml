@@ -24,10 +24,19 @@ jobs:
           java-version: '17'
       - uses: android-actions/setup-android@v3
       - name: Install Android SDK
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.9'
+          gradle-version: '8.11.1'
+      - name: Test local intent and Android skills
+        working-directory: screen-observer
+        run: |
+          mkdir -p build/local-tests
+          javac -d build/local-tests \
+            app/src/main/java/com/erik/screenobserver/IntentAgent.java \
+            app/src/main/java/com/erik/screenobserver/AndroidSkillPack.java \
+            local-tests/AgentUnderstandingTest.java
+          java -cp build/local-tests AgentUnderstandingTest
       - name: Build debug APK
         working-directory: screen-observer
         run: gradle --no-daemon assembleDebug
