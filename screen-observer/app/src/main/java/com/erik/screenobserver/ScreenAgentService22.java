@@ -9,9 +9,11 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
+import android.hardware.display.VirtualDisplay;
 import android.media.Image;
 import android.media.ImageReader;
 import android.media.projection.MediaProjection;
@@ -61,6 +63,7 @@ public class ScreenAgentService22 extends Service {
     private final List<VisionTarget> visionTargets = new ArrayList<>();
 
     private MediaProjection projection;
+    private VirtualDisplay virtualDisplay;
     private ImageReader reader;
     private TextRecognizer ocr;
     private SpeechRecognizer recognizer;
@@ -76,6 +79,7 @@ public class ScreenAgentService22 extends Service {
     private boolean ttsReady = false;
     private boolean bargeInterrupted = false;
     private boolean autoLearning = false;
+    private boolean visionMappingSafe = true;
     private int speechErrors = 0;
 
     private long ignoreUntil = 0;
@@ -83,7 +87,10 @@ public class ScreenAgentService22 extends Service {
     private String lastText = "";
     private String pendingSensitive = "";
     private long pendingSensitiveUntil = 0;
-    private int captureW = 1, captureH = 1, screenW = 1, screenH = 1;
+    private int captureW = 1, captureH = 1;
+    private int contentW = 1, contentH = 1;
+    private int screenW = 1, screenH = 1;
+    private int captureDensity = 160;
 
     public static boolean isRunning() { return runningState; }
     public static boolean isListeningEnabled() { return runningState && listeningState; }
@@ -141,29 +148,94 @@ public class ScreenAgentService22 extends Service {
             return START_NOT_STICKY;
         }
 
-        MediaProjectionManager m = (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
-        projection = m.getMediaProjection(result, data);
+        MediaProjectionManager manager = (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
+        projection = manager.getMediaProjection(result, data);
         projection.registerCallback(new MediaProjection.Callback() {
             @Override public void onStop() { stopSelf(); }
+
+            @Override public void onCapturedContentResize(int width, int height) {
+                handleCapturedContentResize(width, height);
+            }
         }, main);
 
-        android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
-        screenW = Math.max(1, dm.widthPixels);
-        screenH = Math.max(1, dm.heightPixels);
-        captureW = Math.max(360, screenW / 2);
-        captureH = Math.max(640, screenH / 2);
-        int density = Math.max(160, dm.densityDpi / 2);
-        reader = ImageReader.newInstance(captureW, captureH, PixelFormat.RGBA_8888, 2);
-        reader.setOnImageAvailableListener(this::onImage, main);
-        projection.createVirtualDisplay("ScreenObserver22", captureW, captureH, density,
-                android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                reader.getSurface(), null, null);
+        updateScreenMetrics();
+        contentW = screenW;
+        contentH = screenH;
+        int[] target = CaptureGeometry.targetSize(contentW, contentH);
+        captureW = target[0];
+        captureH = target[1];
+        visionMappingSafe = CaptureGeometry.isDirectScreenMappingSafe(contentW, contentH, screenW, screenH);
+        createInitialCaptureSurface();
 
         voiceStatus = "escuchando";
         passiveOverlay();
         startListening(250);
         refreshNotification();
         return START_NOT_STICKY;
+    }
+
+    @Override public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        updateScreenMetrics();
+        visionMappingSafe = CaptureGeometry.isDirectScreenMappingSafe(contentW, contentH, screenW, screenH);
+    }
+
+    private void updateScreenMetrics() {
+        android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+        screenW = Math.max(1, dm.widthPixels);
+        screenH = Math.max(1, dm.heightPixels);
+        captureDensity = Math.max(160, dm.densityDpi);
+    }
+
+    private void createInitialCaptureSurface() {
+        reader = createReader(captureW, captureH);
+        virtualDisplay = projection.createVirtualDisplay(
+                "ScreenObserver22",
+                captureW,
+                captureH,
+                captureDensity,
+                android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                reader.getSurface(),
+                null,
+                null);
+    }
+
+    private ImageReader createReader(int width, int height) {
+        ImageReader imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2);
+        imageReader.setOnImageAvailableListener(this::onImage, main);
+        return imageReader;
+    }
+
+    /** Keeps OCR geometry aligned after rotation or Android app-window sharing resize. */
+    private void handleCapturedContentResize(int width, int height) {
+        if (width <= 0 || height <= 0 || projection == null || virtualDisplay == null) return;
+        contentW = width;
+        contentH = height;
+        updateScreenMetrics();
+        int[] target = CaptureGeometry.targetSize(width, height);
+        int newW = target[0], newH = target[1];
+        visionMappingSafe = CaptureGeometry.isDirectScreenMappingSafe(width, height, screenW, screenH);
+
+        if (newW == captureW && newH == captureH) {
+            visionTargets.clear();
+            return;
+        }
+
+        ImageReader replacement = createReader(newW, newH);
+        ImageReader old = reader;
+        try {
+            virtualDisplay.resize(newW, newH, captureDensity);
+            virtualDisplay.setSurface(replacement.getSurface());
+            reader = replacement;
+            captureW = newW;
+            captureH = newH;
+            visionTargets.clear();
+            if (old != null) old.close();
+        } catch (Exception e) {
+            replacement.close();
+            silent("No pude reajustar la captura; usaré solo controles accesibles.");
+            visionMappingSafe = false;
+        }
     }
 
     private void setupTts() {
@@ -575,16 +647,22 @@ public class ScreenAgentService22 extends Service {
                 return;
             }
         }
-        VisionTarget v = findVisionWithAliases(target);
-        if (v != null) {
-            float x = v.x * ((float) screenW / Math.max(1, captureW));
-            float y = v.y * ((float) screenH / Math.max(1, captureH));
-            if (a.tap(x, y)) {
-                silent((confirmed ? "Confirmado. " : "") + "Pulsé visualmente " + target + ".");
-                return;
+
+        if (visionMappingSafe) {
+            VisionTarget v = findVisionWithAliases(target);
+            if (v != null) {
+                float x = v.x * ((float) screenW / Math.max(1, captureW));
+                float y = v.y * ((float) screenH / Math.max(1, captureH));
+                if (a.tap(x, y)) {
+                    silent((confirmed ? "Confirmado. " : "") + "Pulsé visualmente " + target + ".");
+                    return;
+                }
             }
         }
-        speak("No encontré ese control. Puedes preguntarme qué controles veo.");
+
+        speak(visionMappingSafe
+                ? "No encontré ese control. Puedes preguntarme qué controles veo."
+                : "No encontré ese control mediante Accesibilidad. La captura actual no cubre toda la pantalla, así que no haré un toque visual impreciso.");
     }
 
     private void longClick(String target) {
@@ -624,6 +702,9 @@ public class ScreenAgentService22 extends Service {
         } else {
             result = accessible + (visual.isEmpty() ? "" : ". También leo: " + visual);
         }
+        if (!visionMappingSafe && !visual.isEmpty()) {
+            result += ". La captura no coincide con toda la pantalla; usaré esos textos solo como referencia y no para tocar coordenadas.";
+        }
         if (aloud) speak(result); else silent(result);
     }
 
@@ -652,7 +733,8 @@ public class ScreenAgentService22 extends Service {
 
     private void onImage(ImageReader source) {
         long now = SystemClock.elapsedRealtime();
-        Image image = source.acquireLatestImage();
+        Image image;
+        try { image = source.acquireLatestImage(); } catch (Exception e) { return; }
         if (image == null) return;
         if (now - lastProcess < 650) {
             image.close();
@@ -785,6 +867,7 @@ public class ScreenAgentService22 extends Service {
         }
     }
 
+    /** Queues TTS without any sentinel delay; listening resumes only from TTS callbacks. */
     private void speak(String value) {
         if (value == null || value.trim().isEmpty()) return;
         if (tts == null || !ttsReady) {
@@ -881,6 +964,7 @@ public class ScreenAgentService22 extends Service {
         cancelListening();
         destroyRecognizer();
         if (reader != null) try { reader.close(); } catch (Exception ignored) { }
+        if (virtualDisplay != null) try { virtualDisplay.release(); } catch (Exception ignored) { }
         if (projection != null) try { projection.stop(); } catch (Exception ignored) { }
         if (ocr != null) try { ocr.close(); } catch (Exception ignored) { }
         if (tts != null) try { tts.stop(); tts.shutdown(); } catch (Exception ignored) { }
