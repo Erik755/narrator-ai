@@ -6,12 +6,9 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.media.projection.MediaProjectionManager;
-import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.provider.Settings;
 import android.view.Gravity;
-import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -37,24 +34,22 @@ public class MainActivity extends Activity {
         root.addView(title);
 
         TextView info = new TextView(this);
-        info.setText("Analiza la pantalla localmente, muestra descripción/consejo en una burbuja y puede leerlo por voz. No requiere API ni suscripción.");
+        info.setText("Analiza la pantalla localmente y entrega descripción y consejos por voz y notificaciones prioritarias. No requiere permiso para mostrarse sobre otras apps, API ni suscripción.");
         info.setTextSize(16);
         info.setPadding(0, 30, 0, 30);
         root.addView(info);
 
-        Button overlay = new Button(this);
-        overlay.setText("1. Permitir ventana flotante");
-        overlay.setOnClickListener(v -> requestOverlay());
-        root.addView(overlay);
-
         Button start = new Button(this);
-        start.setText("2. Iniciar monitoreo");
+        start.setText("Iniciar monitoreo");
         start.setOnClickListener(v -> startCapture());
         root.addView(start);
 
         Button stop = new Button(this);
         stop.setText("Detener monitoreo");
-        stop.setOnClickListener(v -> stopService(new Intent(this, ScreenCaptureService.class)));
+        stop.setOnClickListener(v -> {
+            stopService(new Intent(this, ScreenCaptureService.class));
+            status.setText("Estado: detenido");
+        });
         root.addView(stop);
 
         status = new TextView(this);
@@ -69,19 +64,8 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void requestOverlay() {
-        if (!Settings.canDrawOverlays(this)) {
-            Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName()));
-            startActivity(intent);
-        }
-    }
-
     private void startCapture() {
-        if (!Settings.canDrawOverlays(this)) {
-            requestOverlay();
-            status.setText("Estado: falta permiso de ventana flotante");
-            return;
-        }
+        status.setText("Estado: solicitando permiso de captura...");
         startActivityForResult(projectionManager.createScreenCaptureIntent(), REQ_CAPTURE);
     }
 
