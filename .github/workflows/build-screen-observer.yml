@@ -6,6 +6,11 @@ on:
     paths:
       - 'screen-observer/**'
       - '.github/workflows/build-screen-observer.yml'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'screen-observer/**'
+      - '.github/workflows/build-screen-observer.yml'
   workflow_dispatch:
 
 jobs:
