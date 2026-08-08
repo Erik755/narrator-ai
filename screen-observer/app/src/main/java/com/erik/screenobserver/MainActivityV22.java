@@ -50,13 +50,13 @@ public class MainActivityV22 extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         TextView title = new TextView(this);
-        title.setText("Screen Observer Pro 2.2");
+        title.setText("Screen Observer Pro 2.3");
         title.setTextSize(27);
         title.setTextColor(Color.BLACK);
         root.addView(title);
 
         TextView info = new TextView(this);
-        info.setText("Agente local sin costo obligatorio. Incluye habilidad precargada de Android 15/16, comprensión contextual, control por Accesibilidad + OCR y modo silencioso.");
+        info.setText("IA local real para comprender lenguaje natural y mantener conversación. Incluye Android 15/16, Accesibilidad + OCR, habilidades y modo silencioso.");
         info.setTextSize(15);
         info.setPadding(0, 16, 0, 14);
         root.addView(info);
@@ -102,16 +102,16 @@ public class MainActivityV22 extends Activity {
         root.addView(skillStatus);
 
         TextView capabilities = new TextView(this);
-        capabilities.setText("Ejemplos: “abre Ajustes”, “abre WhatsApp”, “abre notificaciones”, “abre ajustes rápidos”, “bloquea la pantalla”, “continúa”, “acepta”, “mantén presionado…”, “escribe…”, “qué controles ves”, “aprende ajedrez”.");
+        capabilities.setText("Habla de forma natural. Ejemplos: “abre WhatsApp”, “entra a los ajustes y luego busca accesibilidad”, “¿qué hago ahora?”, “continúa con eso”, “pulsa Aceptar”, “aprende ajedrez”.");
         capabilities.setTextSize(13);
         capabilities.setPadding(0, 16, 0, 0);
         root.addView(capabilities);
 
-        TextView openAiNote = new TextView(this);
-        openAiNote.setText("OpenAI: ChatGPT Plus no incluye crédito de API. Esta versión mantiene la comprensión local gratuita y no requiere una clave ni pagos adicionales.");
-        openAiNote.setTextSize(12);
-        openAiNote.setPadding(0, 14, 0, 0);
-        root.addView(openAiNote);
+        TextView aiNote = new TextView(this);
+        aiNote.setText("IA: Qwen3 0.6B se descarga automáticamente una sola vez y se ejecuta en el teléfono con LiteRT-LM. No requiere una clave ni una API de pago. Espera la señal y el indicador “🟢 listo · habla ahora” antes de empezar a hablar.");
+        aiNote.setTextSize(12);
+        aiNote.setPadding(0, 14, 0, 0);
+        root.addView(aiNote);
 
         Button appInfo = new Button(this);
         appInfo.setText("ABRIR INFORMACIÓN DE LA APP");
@@ -201,8 +201,8 @@ public class MainActivityV22 extends Activity {
         status.setText(running ? "Estado: activo · " + ScreenAgentService22.getVoiceStatus() : "Estado: detenido");
         String sk = ScreenAgentService22.getActiveSkillState();
         skillStatus.setText(sk == null || sk.isEmpty()
-                ? "Habilidades: Android 15 y 16 precargada."
-                : "Habilidad contextual: " + sk + " · Android 15/16 también disponible.");
+                ? "Habilidades: Android 15 y 16 precargada · IA conversacional local."
+                : "Habilidad contextual: " + sk + " · Android 15/16 + IA local disponibles.");
     }
 
     private void style(Button b, String text, int bg, boolean enabled) {
@@ -259,7 +259,7 @@ public class MainActivityV22 extends Activity {
             s.putExtra("resultCode", resultCode);
             s.putExtra("data", data);
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(s); else startService(s);
-            status.setText("Iniciando asistente…");
+            status.setText("Iniciando asistente e IA local…");
             handler.postDelayed(this::refresh, 500);
             moveTaskToBack(true);
         } else if (requestCode == REQ_CAPTURE) {
