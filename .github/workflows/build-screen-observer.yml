@@ -46,6 +46,7 @@ jobs:
           python3 patch_v25_branding_fix.py
           python3 patch_v25_settings_phrase_fix.py
           python3 patch_v25_blackjack_ocr_fix.py
+          python3 patch_v25_intent_guard_fix.py
       - name: Validate generated v2.5 runtime
         working-directory: screen-observer
         run: |
@@ -95,7 +96,7 @@ jobs:
               'practice-only blackjack actuation': 'BlackjackEngine.isPracticeContext' in s and 'BlackjackEngine.isRealMoneyContext' in s,
               'phone command planner': 'class PhoneCommandPlanner' in p,
               'expanded parser': 'BLACKJACK_PLAY' in i and 'OPEN_SETTINGS_SECTION' in i and 'VOLUME_MUTE' in i,
-              'imperative-only deterministic additions': 'startsCommand' in i,
+              'imperative-only deterministic additions': 'startsCommand' in i and 'quiere decir' in i,
               'model action safety': 'IntentAgent.Type.BLACKJACK_PLAY -> true' in l and 'hasReliableSpeech(hypotheses)' in l,
               'neutral typed/voice model input': 'Entrada del usuario:' in l,
               'enhanced 1.7B AI tier': 'Qwen3_1.7B.litertlm' in l and 'Qwen3 1.7B mejorada' in l,
@@ -108,7 +109,7 @@ jobs:
               raise SystemExit('v2.5 generated runtime validation failed: ' + ', '.join(failed))
           print('PASS generated v2.5 runtime checks:', len(checks))
           PY
-      - name: Test local intent, phone commands and blackjack
+      - name: Compile local test suites
         working-directory: screen-observer
         run: |
           rm -rf build/local-tests
@@ -125,10 +126,18 @@ jobs:
             local-tests/PhoneCommandMatrixTest.java \
             local-tests/BlackjackEngineTest.java \
             local-tests/V25ReviewRegressionTest.java
-          java -cp build/local-tests AgentUnderstandingTest
-          java -cp build/local-tests PhoneCommandMatrixTest
-          java -cp build/local-tests BlackjackEngineTest
-          java -cp build/local-tests V25ReviewRegressionTest
+      - name: Test legacy understanding
+        working-directory: screen-observer
+        run: java -cp build/local-tests AgentUnderstandingTest
+      - name: Test phone command matrix
+        working-directory: screen-observer
+        run: java -cp build/local-tests PhoneCommandMatrixTest
+      - name: Test blackjack engine
+        working-directory: screen-observer
+        run: java -cp build/local-tests BlackjackEngineTest
+      - name: Test v2.5 safety regressions
+        working-directory: screen-observer
+        run: java -cp build/local-tests V25ReviewRegressionTest
       - name: Build debug APK
         working-directory: screen-observer
         run: gradle --no-daemon assembleDebug
