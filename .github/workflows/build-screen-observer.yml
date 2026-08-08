@@ -28,12 +28,13 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
-      - name: Apply v2.3 conversational runtime patch
+      - name: Apply conversational runtime patches
         working-directory: screen-observer
         run: |
           python3 patch_v23.py
           python3 patch_safety_v23.py
           python3 patch_voice_status_v23.py
+          python3 patch_v24.py
       - name: Test local intent and conversation fallback
         working-directory: screen-observer
         run: |
