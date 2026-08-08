@@ -41,6 +41,7 @@ jobs:
           python3 patch_v25.py
           python3 patch_v25_fix.py
           python3 patch_v25_compile_fix.py
+          python3 patch_v25_model_upgrade.py
       - name: Validate generated v2.5 runtime
         working-directory: screen-observer
         run: |
@@ -82,6 +83,9 @@ jobs:
               'expanded parser': 'BLACKJACK_PLAY' in i and 'OPEN_SETTINGS_SECTION' in i and 'VOLUME_MUTE' in i,
               'model action safety': 'IntentAgent.Type.BLACKJACK_PLAY -> true' in l and 'hasReliableSpeech(hypotheses)' in l,
               'neutral typed/voice model input': 'Entrada del usuario:' in l,
+              'enhanced 1.7B AI tier': 'Qwen3_1.7B.litertlm' in l and 'Qwen3 1.7B mejorada' in l,
+              'memory and storage gate': 'ENHANCED_MIN_RAM_BYTES' in l and 'ENHANCED_MIN_FREE_BYTES' in l and 'supportsEnhancedModel()' in l,
+              'enhanced model fallback': 'listOf(ENHANCED_MODEL, STANDARD_MODEL)' in l and 'IA mejorada no disponible; usando modelo ligero' in l,
           }
           failed = [name for name, ok in checks.items() if not ok]
           if failed:
