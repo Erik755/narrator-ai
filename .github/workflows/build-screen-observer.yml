@@ -35,6 +35,7 @@ jobs:
           python3 patch_safety_v23.py
           python3 patch_voice_status_v23.py
           python3 patch_v24.py
+          python3 patch_v24_fix.py
       - name: Test local intent and conversation fallback
         working-directory: screen-observer
         run: |
