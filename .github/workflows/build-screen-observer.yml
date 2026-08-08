@@ -37,7 +37,9 @@ jobs:
           python3 patch_v24.py
           python3 patch_v24_fix.py
           python3 patch_v24_review_fixes.py
-      - name: Validate generated v2.4 runtime
+          python3 patch_v25.py
+          python3 patch_v25_fix.py
+      - name: Validate generated v2.5 runtime
         working-directory: screen-observer
         run: |
           python3 - <<'PY'
@@ -45,33 +47,63 @@ jobs:
           a = Path('app/src/main/java/com/erik/screenobserver/AgentAccessibilityService.java').read_text()
           s = Path('app/src/main/java/com/erik/screenobserver/ScreenAgentService22.java').read_text()
           l = Path('app/src/main/java/com/erik/screenobserver/LocalLanguageAgent.kt').read_text()
-          k = Path('app/src/main/java/com/erik/screenobserver/SkillManager.java').read_text()
+          i = Path('app/src/main/java/com/erik/screenobserver/IntentAgent.java').read_text()
+          c = Path('app/src/main/java/com/erik/screenobserver/AndroidAppController.java').read_text()
+          b = Path('app/src/main/java/com/erik/screenobserver/BlackjackEngine.java').read_text()
+          p = Path('app/src/main/java/com/erik/screenobserver/PhoneCommandPlanner.java').read_text()
+
+          action_pos = s.find('if (ACTION_TEXT_COMMAND.equals(action))')
+          projection_pos = s.find('if (projection != null) return START_NOT_STICKY;')
+          handler_start = s.find('private void handleTextCommand')
+          handler_end = s.find('private String currentUnderstandingContext', handler_start)
+          handler = s[handler_start:handler_end]
+
           checks = {
               'typed overlay input': 'EditText input = new EditText(this);' in a,
-              'typed command action': 'ACTION_TEXT_COMMAND' in s and 'handleTextCommand' in s,
-              'close app dispatch': 'case CLOSE_APP:' in s,
-              'current app learning': 'learnCurrentApp()' in s and 'recordLearningObservation' in s,
-              'speech reliability fast path': 'hasReliableSpeech(hypotheses)' in l,
-              'preserved skill sources': 'getSkillSourcesArray' in k and 'previousSources' in s,
-              'serialized research callback': 'main.post(() -> {' in s and '[Investigación gratuita]' in s,
+              'typed action precedes projection gate': action_pos >= 0 and projection_pos >= 0 and action_pos < projection_pos,
+              'typed channel independent of mic pause': 'typedCommandsAvailable()' in s and 'return runningState;' in s and 'if (!listeningEnabled)' not in handler,
+              'deterministic plan first': 'PhoneCommandPlanner.plan(typed' in handler,
+              'multi-step typed commands': 'executeCommandPlan' in s,
+              'pause explains text remains active': 'La entrada escrita sigue activa' in s,
+              'resume listening': 'case RESUME_LISTENING:' in s,
+              'search skill': 'case SEARCH:' in s and 'searchCurrentApp' in s,
+              'volume skills': 'case VOLUME_UP:' in s and 'adjustVolume' in s,
+              'swipe skills': 'swipeLeft()' in a and 'swipeRight()' in a,
+              'ordinal controls': 'clickOrdinal' in a and 'case CLICK_ORDINAL:' in s,
+              'settings sections': 'openSettingsSection' in c and 'case OPEN_SETTINGS_SECTION:' in s,
+              'url opening': 'openUrl' in c and 'case OPEN_URL:' in s,
+              'blackjack engine': 'recommendHard' in b and 'recommendSoft' in b and 'recommendPair' in b,
+              'blackjack advice': 'case BLACKJACK_ADVICE:' in s,
+              'practice-only blackjack actuation': 'BlackjackEngine.isPracticeContext' in s and 'BlackjackEngine.isRealMoneyContext' in s,
+              'phone command planner': 'class PhoneCommandPlanner' in p,
+              'expanded parser': 'BLACKJACK_PLAY' in i and 'OPEN_SETTINGS_SECTION' in i and 'VOLUME_MUTE' in i,
+              'model action safety': 'IntentAgent.Type.BLACKJACK_PLAY -> true' in l and 'hasReliableSpeech(hypotheses)' in l,
+              'neutral typed/voice model input': 'Entrada del usuario:' in l,
           }
           failed = [name for name, ok in checks.items() if not ok]
           if failed:
-              raise SystemExit('v2.4 generated runtime validation failed: ' + ', '.join(failed))
-          print('PASS generated v2.4 runtime checks:', len(checks))
+              raise SystemExit('v2.5 generated runtime validation failed: ' + ', '.join(failed))
+          print('PASS generated v2.5 runtime checks:', len(checks))
           PY
       - name: Test local intent and conversation fallback
         working-directory: screen-observer
         run: |
+          rm -rf build/local-tests
           mkdir -p build/local-tests
           javac -d build/local-tests \
             app/src/main/java/com/erik/screenobserver/TextNormalizer.java \
+            app/src/main/java/com/erik/screenobserver/BlackjackEngine.java \
             app/src/main/java/com/erik/screenobserver/IntentAgent.java \
+            app/src/main/java/com/erik/screenobserver/PhoneCommandPlanner.java \
             app/src/main/java/com/erik/screenobserver/AndroidSkillPack.java \
             app/src/main/java/com/erik/screenobserver/CaptureGeometry.java \
             app/src/main/java/com/erik/screenobserver/ConversationEngine.java \
-            local-tests/AgentUnderstandingTest.java
+            local-tests/AgentUnderstandingTest.java \
+            local-tests/PhoneCommandMatrixTest.java \
+            local-tests/BlackjackEngineTest.java
           java -cp build/local-tests AgentUnderstandingTest
+          java -cp build/local-tests PhoneCommandMatrixTest
+          java -cp build/local-tests BlackjackEngineTest
       - name: Build debug APK
         working-directory: screen-observer
         run: gradle --no-daemon assembleDebug
