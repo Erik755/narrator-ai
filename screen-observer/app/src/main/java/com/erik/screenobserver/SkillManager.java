@@ -6,11 +6,9 @@ import android.content.SharedPreferences;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Locale;
 
 public class SkillManager {
     private static final String PREFS = "screen_observer_skills";
@@ -24,18 +22,21 @@ public class SkillManager {
         ensureBuiltInSkills();
     }
 
-    /** Adds built-ins without replacing the user's current active skill. */
+    /** Adds or upgrades built-ins without replacing the user's current active skill. */
     private synchronized void ensureBuiltInSkills() {
         try {
             JSONObject all = readAll();
             String k = key(AndroidSkillPack.SKILL_NAME);
-            if (!all.has(k)) {
+            JSONObject existing = all.optJSONObject(k);
+            int storedVersion = existing == null ? -1 : existing.optInt("builtinVersion", -1);
+            if (existing == null || storedVersion != AndroidSkillPack.BUILTIN_VERSION) {
                 JSONObject skill = new JSONObject();
                 skill.put("name", AndroidSkillPack.SKILL_NAME);
                 skill.put("notes", AndroidSkillPack.builtInNotes());
                 skill.put("sources", new JSONArray());
                 skill.put("updatedAt", System.currentTimeMillis());
                 skill.put("builtin", true);
+                skill.put("builtinVersion", AndroidSkillPack.BUILTIN_VERSION);
                 all.put(k, skill);
                 prefs.edit().putString(KEY_SKILLS, all.toString()).apply();
             }
@@ -46,15 +47,19 @@ public class SkillManager {
         if (name == null || name.trim().isEmpty()) return;
         try {
             JSONObject all = readAll();
+            String k = key(name);
+            JSONObject existing = all.optJSONObject(k);
+            if (existing != null && existing.optBoolean("builtin", false)) return;
+
             JSONObject skill = new JSONObject();
             skill.put("name", name.trim());
             skill.put("notes", notes == null ? "" : notes);
             skill.put("sources", sources == null ? new JSONArray() : sources);
             skill.put("updatedAt", System.currentTimeMillis());
-            all.put(key(name), skill);
+            all.put(k, skill);
             prefs.edit()
                     .putString(KEY_SKILLS, all.toString())
-                    .putString(KEY_ACTIVE, key(name))
+                    .putString(KEY_ACTIVE, k)
                     .apply();
         } catch (Exception ignored) { }
     }
@@ -172,10 +177,7 @@ public class SkillManager {
     }
 
     private static String normalize(String value) {
-        if (value == null) return "";
-        String n = Normalizer.normalize(value.toLowerCase(Locale.ROOT), Normalizer.Form.NFD)
-                .replaceAll("\\p{M}+", "");
-        return n.replaceAll("[^a-z0-9ñ ]", " ").replaceAll("\\s+", " ").trim();
+        return TextNormalizer.normalize(value);
     }
 
     private static String join(List<String> values, String separator) {
