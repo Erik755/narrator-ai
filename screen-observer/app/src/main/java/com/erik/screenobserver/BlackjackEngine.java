@@ -49,15 +49,16 @@ public final class BlackjackEngine {
     }
 
     private static final Pattern SIMPLE_TOTAL = Pattern.compile(
-            "(?iu)(?:tengo|mano|mi mano|total|jugador|player)?\\s*(\\d{1,2})\\s*(?:contra|vs|versus|frente a|dealer|crupier)\\s*(a|as|ace|[2-9]|10|j|q|k)");
+            "(?iu)(?:tengo|mano|mi mano|total|jugador|player)?\\s*(\\d{1,2})\\s*(?:contra|vs|versus|frente a|dealer|crupier)\\s*(a|as|ace|[2-9]|10|j|q|k)\\b");
     private static final Pattern SOFT_HAND = Pattern.compile(
-            "(?iu)(?:tengo|mano|mi mano)?\\s*(?:a|as|ace)\\s*[,/+ -]*\\s*([2-9]|10)\\s*(?:contra|vs|versus|frente a)\\s*(a|as|ace|[2-9]|10|j|q|k)");
+            "(?iu)(?:tengo|mano|mi mano)?\\s*(?:a|as|ace)\\s*[,/+ -]*\\s*([2-9]|10)\\s*(?:contra|vs|versus|frente a)\\s*(a|as|ace|[2-9]|10|j|q|k)\\b");
     private static final Pattern PAIR_HAND = Pattern.compile(
-            "(?iu)(?:tengo|mano|mi mano)?\\s*(a|as|ace|[2-9]|10|j|q|k)\\s*[,/+ -]+\\s*(a|as|ace|[2-9]|10|j|q|k)\\s*(?:contra|vs|versus|frente a)\\s*(a|as|ace|[2-9]|10|j|q|k)");
+            "(?iu)(?:tengo|mano|mi mano)?\\s*(a|as|ace|[2-9]|10|j|q|k)\\s*[,/+ -]+\\s*(a|as|ace|[2-9]|10|j|q|k)\\s*(?:contra|vs|versus|frente a)\\s*(a|as|ace|[2-9]|10|j|q|k)\\b");
+    // OCR fallback is intentionally strict. Never cross another field label to invent a card.
     private static final Pattern DEALER = Pattern.compile(
-            "(?iu)(?:dealer|crupier|casa)\\D{0,18}(a|as|ace|[2-9]|10|j|q|k)");
+            "(?iu)(?:^|[\\r\\n|])\\s*(?:dealer|crupier|casa)\\s*[:=\\-]?\\s*(a|as|ace|[2-9]|10|j|q|k)\\b");
     private static final Pattern PLAYER_TOTAL = Pattern.compile(
-            "(?iu)(?:tu mano|your hand|player|jugador|mano|total)\\D{0,18}(\\d{1,2})");
+            "(?iu)(?:^|[\\r\\n|])\\s*(?:tu mano|your hand|player|jugador|mano|total)\\s*[:=\\-]?\\s*(\\d{1,2})\\b");
 
     private BlackjackEngine() { }
 
@@ -185,7 +186,7 @@ public final class BlackjackEngine {
             return r(Decision.HIT, 12, dealerUp, false, true, "Seises piden aquí.");
         }
         if (pairRank == 5)
-            return recommendHard(10, dealerUp, true);
+            return recommendHard(10, dealerUp, canDoubleAfterSplit);
         if (pairRank == 4) {
             if (canDoubleAfterSplit && (dealerUp == 5 || dealerUp == 6))
                 return r(Decision.SPLIT, 8, dealerUp, false, true,
@@ -200,19 +201,20 @@ public final class BlackjackEngine {
             return r(Decision.HIT, pairRank * 2, dealerUp, false, true,
                     "Parejas bajas piden fuera del rango de separación.");
         }
-        return recommendHard(total, dealerUp, true);
+        return recommendHard(total, dealerUp, canDoubleAfterSplit);
     }
 
     public static Recommendation recommendFromText(String text) {
         if (text == null || text.trim().isEmpty()) return unknown("No hay datos de la mano.");
         String raw = text.replace('–', '-').replace('—', '-');
+        boolean canDouble = canDoubleFromText(raw);
 
         Matcher pair = PAIR_HAND.matcher(raw);
         if (pair.find()) {
             int a = rank(pair.group(1));
             int b = rank(pair.group(2));
             int d = rank(pair.group(3));
-            if (a > 0 && a == b && d > 0) return recommendPair(a, d, true);
+            if (a > 0 && a == b && d > 0) return recommendPair(a, d, canDouble);
         }
 
         Matcher soft = SOFT_HAND.matcher(raw);
@@ -220,26 +222,36 @@ public final class BlackjackEngine {
             int second = rank(soft.group(1));
             int d = rank(soft.group(2));
             if (second >= 2 && second <= 10 && d > 0)
-                return recommendSoft(11 + second, d, true);
+                return recommendSoft(11 + second, d, canDouble);
         }
 
         Matcher simple = SIMPLE_TOTAL.matcher(raw);
         if (simple.find()) {
             int total = safeInt(simple.group(1));
             int d = rank(simple.group(2));
-            if (total >= 4 && total <= 21 && d > 0) return recommendHard(total, d, true);
+            if (total >= 4 && total <= 21 && d > 0) return recommendHard(total, d, canDouble);
         }
 
-        // OCR fallback: dealer label plus player total anywhere in the same screen text.
+        // OCR fallback: labels must contain their values locally; never cross another field.
         Matcher dm = DEALER.matcher(raw);
         Matcher pm = PLAYER_TOTAL.matcher(raw);
         if (dm.find() && pm.find()) {
             int d = rank(dm.group(1));
             int total = safeInt(pm.group(1));
-            if (d > 0 && total >= 4 && total <= 21) return recommendHard(total, d, true);
+            if (d > 0 && total >= 4 && total <= 21) return recommendHard(total, d, canDouble);
         }
 
         return unknown("No pude extraer el total del jugador y la carta visible del dealer.");
+    }
+
+    private static boolean canDoubleFromText(String text) {
+        String n = normalize(text);
+        return !(n.contains("no puedo doblar") || n.contains("no se puede doblar")
+                || n.contains("doble no disponible") || n.contains("doblar no disponible")
+                || n.contains("cannot double") || n.contains("can't double")
+                || n.contains("double unavailable") || n.contains("already hit")
+                || n.contains("ya pedi") || n.contains("ya pedi carta")
+                || n.contains("tercera carta") || n.contains("three cards"));
     }
 
     public static boolean isBlackjackContext(String text) {
@@ -253,7 +265,7 @@ public final class BlackjackEngine {
         String n = normalize(text);
         return n.contains("practice") || n.contains("practica") || n.contains("entrenamiento")
                 || n.contains("demo") || n.contains("free play") || n.contains("juego gratis")
-                || n.contains("modo gratis") || n.contains("sin dinero real");
+                || n.contains("modo gratis") || n.contains("sin dinero real") || n.contains("no real money");
     }
 
     public static boolean isRealMoneyContext(String text) {
@@ -261,11 +273,17 @@ public final class BlackjackEngine {
         String n = normalize(text);
         boolean explicitCurrency = text.contains("$") || text.contains("€") || text.contains("£")
                 || n.contains(" mxn") || n.contains(" usd") || n.contains(" eur");
-        boolean moneyWords = n.contains("dinero real") || n.contains("real money")
+        if (explicitCurrency) return true;
+
+        // Explicit negation wins for generic money wording, but not for visible currency.
+        if (n.contains("sin dinero real") || n.contains("no real money")
+                || n.contains("dinero de practica") || n.contains("practice money")
+                || n.contains("creditos de practica") || n.contains("practice credits")) return false;
+
+        return n.contains("dinero real") || n.contains("real money")
                 || n.contains("depositar") || n.contains("deposit") || n.contains("retirar")
                 || n.contains("withdraw") || n.contains("cash balance") || n.contains("saldo disponible")
                 || n.contains("wager real") || n.contains("apuesta real");
-        return explicitCurrency || moneyWords;
     }
 
     public static String[] labelsFor(Decision decision) {
