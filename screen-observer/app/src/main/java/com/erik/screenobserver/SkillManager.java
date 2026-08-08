@@ -14,6 +14,7 @@ public class SkillManager {
     private static final String PREFS = "screen_observer_skills";
     private static final String KEY_SKILLS = "skills_json";
     private static final String KEY_ACTIVE = "active_skill";
+    private static final String LEGACY_ANDROID_SKILL = "Android 15 y 16";
 
     private final SharedPreferences prefs;
 
@@ -22,24 +23,45 @@ public class SkillManager {
         ensureBuiltInSkills();
     }
 
-    /** Adds or upgrades built-ins without replacing the user's current active skill. */
+    /** Adds/upgrades the system skill while preserving any user-created skill with the old name. */
     private synchronized void ensureBuiltInSkills() {
         try {
             JSONObject all = readAll();
             String k = key(AndroidSkillPack.SKILL_NAME);
+            String oldKey = key(LEGACY_ANDROID_SKILL);
+            String active = prefs.getString(KEY_ACTIVE, "");
+
+            // Previous app versions used a user-collidable name. Remove that legacy entry only
+            // when it is positively marked as built-in. An unmarked user skill is never replaced.
+            if (!oldKey.equals(k)) {
+                JSONObject legacy = all.optJSONObject(oldKey);
+                if (legacy != null && legacy.optBoolean("builtin", false)) {
+                    all.remove(oldKey);
+                    if (oldKey.equals(active)) active = k;
+                }
+            }
+
             JSONObject existing = all.optJSONObject(k);
             int storedVersion = existing == null ? -1 : existing.optInt("builtinVersion", -1);
-            if (existing == null || storedVersion != AndroidSkillPack.BUILTIN_VERSION) {
-                JSONObject skill = new JSONObject();
-                skill.put("name", AndroidSkillPack.SKILL_NAME);
-                skill.put("notes", AndroidSkillPack.builtInNotes());
-                skill.put("sources", new JSONArray());
-                skill.put("updatedAt", System.currentTimeMillis());
-                skill.put("builtin", true);
-                skill.put("builtinVersion", AndroidSkillPack.BUILTIN_VERSION);
-                all.put(k, skill);
-                prefs.edit().putString(KEY_SKILLS, all.toString()).apply();
+            if (existing == null || !existing.optBoolean("builtin", false)
+                    || storedVersion != AndroidSkillPack.BUILTIN_VERSION) {
+                // If the new reserved display name somehow belongs to a user skill, preserve it
+                // and do not overwrite. This is safer than losing user-authored knowledge.
+                if (existing == null || existing.optBoolean("builtin", false)) {
+                    JSONObject skill = new JSONObject();
+                    skill.put("name", AndroidSkillPack.SKILL_NAME);
+                    skill.put("notes", AndroidSkillPack.builtInNotes());
+                    skill.put("sources", new JSONArray());
+                    skill.put("updatedAt", System.currentTimeMillis());
+                    skill.put("builtin", true);
+                    skill.put("builtinVersion", AndroidSkillPack.BUILTIN_VERSION);
+                    all.put(k, skill);
+                }
             }
+
+            SharedPreferences.Editor editor = prefs.edit().putString(KEY_SKILLS, all.toString());
+            if (active != null && !active.isEmpty()) editor.putString(KEY_ACTIVE, active);
+            editor.apply();
         } catch (Exception ignored) { }
     }
 
