@@ -45,6 +45,7 @@ jobs:
           python3 patch_v25_review_fixes.py
           python3 patch_v25_branding_fix.py
           python3 patch_v25_settings_phrase_fix.py
+          python3 patch_v25_blackjack_ocr_fix.py
       - name: Validate generated v2.5 runtime
         working-directory: screen-observer
         run: |
@@ -87,6 +88,7 @@ jobs:
               'url opening': 'openUrl' in c and 'case OPEN_URL:' in s,
               'blackjack engine': 'recommendHard' in b and 'recommendSoft' in b and 'recommendPair' in b,
               'strict dealer OCR': 'Never cross another field label' in b,
+              'same-line blackjack labels': '(?:dealer|crupier|casa)' in b and '(?:tu mano|your hand|player|jugador|mano|total)' in b,
               'double availability parsing': 'canDoubleFromText' in b,
               'negated real-money handling': 'sin dinero real' in b and 'Explicit negation wins' in b,
               'blackjack advice': 'case BLACKJACK_ADVICE:' in s,
