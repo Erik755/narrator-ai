@@ -43,6 +43,7 @@ jobs:
           python3 patch_v25_compile_fix.py
           python3 patch_v25_model_upgrade.py
           python3 patch_v25_review_fixes.py
+          python3 patch_v25_branding_fix.py
       - name: Validate generated v2.5 runtime
         working-directory: screen-observer
         run: |
