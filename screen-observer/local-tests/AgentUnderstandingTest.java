@@ -1,5 +1,6 @@
 import com.erik.screenobserver.AndroidSkillPack;
 import com.erik.screenobserver.CaptureGeometry;
+import com.erik.screenobserver.ConversationEngine;
 import com.erik.screenobserver.IntentAgent;
 
 import java.util.ArrayList;
@@ -39,6 +40,9 @@ public final class AgentUnderstandingTest {
         captureSizingPreservesAspectRatio();
         rotationMappingIsSafe();
         appWindowMappingIsRejected();
+        conversationalReplyDoesNotEcho();
+        conversationKeepsFollowUpContext();
+        greetingIsNatural();
 
         System.out.println("PASS " + passed + "/" + passed);
     }
@@ -118,6 +122,34 @@ public final class AgentUnderstandingTest {
     private static void appWindowMappingIsRejected() {
         require(!CaptureGeometry.isDirectScreenMappingSafe(1000, 1000, 1080, 2400),
                 "square app-window capture must not be mapped to full-screen tap coordinates");
+        passed++;
+    }
+
+    private static void conversationalReplyDoesNotEcho() {
+        ConversationEngine.Memory m = new ConversationEngine.Memory();
+        String request = "necesito ayuda para seguir con lo que estoy haciendo";
+        m.rememberUser(request, "GENERAL", "");
+        String reply = ConversationEngine.reply(request, "", "", "", m);
+        require(!ConversationEngine.containsEcho(reply, request), "conversation must not parrot the user: " + reply);
+        passed++;
+    }
+
+    private static void conversationKeepsFollowUpContext() {
+        ConversationEngine.Memory m = new ConversationEngine.Memory();
+        m.rememberUser("abre ajustes", "OPEN_SETTINGS", "Ajustes");
+        m.rememberReply("Ajustes abiertos.");
+        m.rememberUser("y ahora", "GENERAL", "");
+        String reply = ConversationEngine.reply("y ahora", "", "", "Permisos y aplicaciones", m);
+        require(reply.toLowerCase().contains("contexto") || reply.toLowerCase().contains("continu"),
+                "follow-up should acknowledge prior context: " + reply);
+        passed++;
+    }
+
+    private static void greetingIsNatural() {
+        ConversationEngine.Memory m = new ConversationEngine.Memory();
+        String reply = ConversationEngine.reply("hola", "", "", "", m);
+        require(reply.startsWith("Hola"), "greeting should be natural: " + reply);
+        require(!reply.toLowerCase().contains("entend"), "greeting should not say 'entendí': " + reply);
         passed++;
     }
 
