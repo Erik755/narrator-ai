@@ -291,17 +291,21 @@ public final class IntentAgent {
         return "";
     }
 
-    /** Finds the actual approximate command token and returns only the words after it. */
+    /**
+     * Fuzzy recovery is intentionally restricted to the first spoken token. Exact command
+     * patterns above may occur later in a sentence, but a word inside ordinary conversation
+     * (for example "poca") must never become an actionable "toca" command by edit distance.
+     */
     private static String wordsAfterApproxToken(String raw, String[] targets, int maxDistance) {
         if (raw == null) return "";
         String[] rawWords = raw.trim().split("\\s+");
         String[] normalizedWords = normalize(raw).split(" ");
         int usableWords = Math.min(rawWords.length, normalizedWords.length);
-        for (int i = 0; i < usableWords; i++) {
-            for (String target : targets) {
-                if (distance(normalizedWords[i], normalize(target)) <= maxDistance) {
-                    return cleanup(joinWords(rawWords, i + 1));
-                }
+        if (usableWords < 2) return "";
+        int i = 0;
+        for (String target : targets) {
+            if (distance(normalizedWords[i], normalize(target)) <= maxDistance) {
+                return cleanup(joinWords(rawWords, i + 1));
             }
         }
         return "";
