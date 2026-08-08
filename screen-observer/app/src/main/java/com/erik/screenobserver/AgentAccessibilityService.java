@@ -304,23 +304,31 @@ public class AgentAccessibilityService extends AccessibilityService {
         return null;
     }
 
+    /**
+     * Matches actuation targets only against stable identity fields. State descriptions are
+     * intentionally excluded: finding a switch because it is currently "On" and then clicking
+     * it would invert the requested state. View IDs are stripped to their resource name so the
+     * package prefix cannot accidentally satisfy short targets such as "ok".
+     */
     private boolean matchesNode(AccessibilityNodeInfo node, String target) {
         if (node == null || target.isEmpty()) return false;
         String text = normalize(node.getText() == null ? "" : node.getText().toString());
         String desc = normalize(node.getContentDescription() == null ? "" : node.getContentDescription().toString());
         String hint = normalize(node.getHintText() == null ? "" : node.getHintText().toString());
-        String viewId = normalize(node.getViewIdResourceName() == null ? "" : node.getViewIdResourceName().replace('_', ' ').replace('/', ' '));
-        String state = "";
-        if (Build.VERSION.SDK_INT >= 30 && node.getStateDescription() != null) {
-            state = normalize(node.getStateDescription().toString());
-        }
+        String rawId = node.getViewIdResourceName() == null ? "" : node.getViewIdResourceName();
+        int slash = rawId.lastIndexOf('/');
+        String viewId = normalize(slash >= 0 ? rawId.substring(slash + 1).replace('_', ' ') : "");
         return fieldMatches(text, target) || fieldMatches(desc, target) || fieldMatches(hint, target)
-                || fieldMatches(viewId, target) || fieldMatches(state, target);
+                || idMatches(viewId, target);
     }
 
     private boolean fieldMatches(String field, String target) {
         return !field.isEmpty() && (field.equals(target) || field.contains(target)
                 || (field.length() >= 3 && target.contains(field)));
+    }
+
+    private boolean idMatches(String field, String target) {
+        return !field.isEmpty() && (field.equals(target) || field.contains(target));
     }
 
     private boolean clickNodeOrParent(AccessibilityNodeInfo node) {
