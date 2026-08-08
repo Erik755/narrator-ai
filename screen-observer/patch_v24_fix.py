@@ -53,6 +53,12 @@ a11y_path = Path("app/src/main/java/com/erik/screenobserver/AgentAccessibilitySe
 a11y = a11y_path.read_text(encoding="utf-8")
 a11y = replace_once(
     a11y,
+    "import android.content.Context;\n",
+    "import android.content.Context;\nimport android.content.Intent;\n",
+    "typed overlay Intent import",
+)
+a11y = replace_once(
+    a11y,
     "        int overlayWidth = Math.min(dp(320), Math.max(dp(250), screenWidth - dp(16)));",
     "        int overlayWidth = Math.max(dp(220), Math.min(dp(320), screenWidth - dp(16)));",
     "responsive overlay width",
@@ -90,4 +96,4 @@ test = replace_once(
 )
 test_path.write_text(test, encoding="utf-8")
 
-print("patch_v24_fix: generated strings, responsive overlay and broader game phrases fixed")
+print("patch_v24_fix: generated strings, overlay import/width and broader game phrases fixed")
