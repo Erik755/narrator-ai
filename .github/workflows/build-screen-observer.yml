@@ -40,6 +40,7 @@ jobs:
           python3 patch_v25_anchor_fix.py
           python3 patch_v25.py
           python3 patch_v25_fix.py
+          python3 patch_v25_compile_fix.py
       - name: Validate generated v2.5 runtime
         working-directory: screen-observer
         run: |
@@ -72,6 +73,7 @@ jobs:
               'swipe skills': 'swipeLeft()' in a and 'swipeRight()' in a,
               'ordinal controls': 'clickOrdinal' in a and 'case CLICK_ORDINAL:' in s,
               'settings sections': 'openSettingsSection' in c and 'case OPEN_SETTINGS_SECTION:' in s,
+              'notification settings action valid': 'Settings.ACTION_ALL_APPS_NOTIFICATION_SETTINGS' in c and 'Settings.ACTION_NOTIFICATION_SETTINGS' not in c,
               'url opening': 'openUrl' in c and 'case OPEN_URL:' in s,
               'blackjack engine': 'recommendHard' in b and 'recommendSoft' in b and 'recommendPair' in b,
               'blackjack advice': 'case BLACKJACK_ADVICE:' in s,
