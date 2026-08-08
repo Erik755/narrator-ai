@@ -11,8 +11,9 @@ import java.util.Map;
  * This is deliberately data/logic only so it can be unit tested without Android runtime.
  */
 public final class AndroidSkillPack {
-    public static final String SKILL_NAME = "Android 15 y 16";
-    public static final int BUILTIN_VERSION = 2;
+    /** Distinct system-owned name avoids overwriting a user-created legacy skill of the same name. */
+    public static final String SKILL_NAME = "Android 15/16 — sistema";
+    public static final int BUILTIN_VERSION = 3;
 
     private static final Map<String, List<String>> CONTROL_ALIASES = new LinkedHashMap<>();
     static {
@@ -44,8 +45,9 @@ public final class AndroidSkillPack {
                 + "menús, controles con descripción de contenido y acciones personalizadas expuestas por Accesibilidad. "
                 + "Puede usar Atrás, Inicio, Recientes, notificaciones, ajustes rápidos, menú de energía y bloqueo de pantalla. "
                 + "Para aplicaciones de terceros inspecciona dinámicamente el árbol de accesibilidad; si un control no está "
-                + "expuesto, utiliza OCR y coordenadas visibles como segundo método. Antes de acciones sensibles debe confirmar. "
-                + "No intenta eludir FLAG_SECURE, bloqueos del sistema ni permisos que Android exija al usuario.";
+                + "expuesto, utiliza OCR y coordenadas visibles como segundo método únicamente cuando la captura corresponde "
+                + "al display completo. Antes de acciones sensibles debe confirmar. No intenta eludir FLAG_SECURE, bloqueos "
+                + "del sistema ni permisos que Android exija al usuario.";
     }
 
     /** Returns target plus the best matching Android control synonym family. */
@@ -102,12 +104,17 @@ public final class AndroidSkillPack {
         return "";
     }
 
+    /** Only actual Android system surfaces should force the built-in skill active. */
     public static boolean looksLikeAndroidContext(String packageName, String screenText) {
         String p = normalize(packageName);
-        String s = normalize(screenText);
-        return p.startsWith("com android") || p.startsWith("com google android") ||
-                s.contains("ajustes") || s.contains("settings") || s.contains("permiso") ||
-                s.contains("permission") || s.contains("notificaciones") || s.contains("notifications");
+        return p.equals("com android settings")
+                || p.startsWith("com android settings ")
+                || p.equals("com android systemui")
+                || p.startsWith("com android systemui ")
+                || p.equals("com android permissioncontroller")
+                || p.startsWith("com android permissioncontroller ")
+                || p.equals("com google android permissioncontroller")
+                || p.startsWith("com google android permissioncontroller ");
     }
 
     private static boolean containsNormalized(List<String> values, String candidate) {
