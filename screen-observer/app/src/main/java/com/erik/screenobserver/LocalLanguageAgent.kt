@@ -16,6 +16,7 @@ import java.net.URL
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlin.math.max
 
 /**
  * Real on-device language model layer. It downloads an Apache-2.0 Qwen3 0.6B
@@ -43,11 +44,14 @@ class LocalLanguageAgent(
         val usedModel: Boolean,
     )
 
+    private data class Hypothesis(val text: String, val score: Float?)
+
     companion object {
         private const val MODEL_FILE = "qwen3_0.6b_nothink_q4_block32_ekv1280.litertlm"
         private const val MODEL_URL =
             "https://huggingface.co/litert-community/Qwen3-0.6B-int4/resolve/main/qwen3_0.6b_nothink_q4_block32_ekv1280.litertlm?download=true"
         private const val MIN_MODEL_BYTES = 300_000_000L
+        private const val MIN_ACTION_SPEECH_CONFIDENCE = 0.30f
 
         private val ACTIONS = IntentAgent.Type.entries.joinToString(",") { it.name }
 
@@ -59,6 +63,7 @@ class LocalLanguageAgent(
             Para conversación o preguntas generales usa GENERAL y responde en reply.
             Para acciones coloca el objeto/control/app/texto en argument y deja reply vacío salvo que una aclaración sea necesaria.
             No inventes que una acción ya ocurrió: solo clasifica la intención. La app ejecutará la acción después.
+            Las hipótesis de voz incluyen confianza. Ignora alternativas claramente menos probables que la mejor.
             Si una orden destructiva aparece (pagar, transferir, borrar, desinstalar, restablecer, formatear), clasifícala normalmente; la app pedirá confirmación por separado.
             Si no estás suficientemente seguro, usa GENERAL y pide una aclaración corta sin citar literalmente la frase del usuario.
             Devuelve SIEMPRE y SOLO un JSON en una línea con este formato:
@@ -122,24 +127,46 @@ class LocalLanguageAgent(
         activeSkill: String?,
         callback: Callback,
     ) {
-        val safeCandidates = candidates?.filter { it.isNotBlank() }?.take(5).orEmpty()
-        val fallback = IntentAgent.interpret(safeCandidates, confidences, activeSkill ?: "", screenText ?: "")
-        if (!isReady() || safeCandidates.isEmpty()) {
+        val hypotheses = candidates.orEmpty().take(5).mapIndexedNotNull { index, text ->
+            if (text.isBlank()) return@mapIndexedNotNull null
+            val rawScore = confidences?.getOrNull(index)
+            val score = rawScore?.takeIf { it in 0f..1f }
+            Hypothesis(text, score)
+        }
+        if (hypotheses.isEmpty()) {
+            callback.onResult(Result(IntentAgent.Type.GENERAL, "", "", 0.0, false))
+            return
+        }
+
+        val fallbackTexts = hypotheses.map { it.text }
+        val hasScores = hypotheses.any { it.score != null }
+        val fallbackScores = if (hasScores) FloatArray(hypotheses.size) { hypotheses[it].score ?: -1f } else null
+        val fallback = IntentAgent.interpret(fallbackTexts, fallbackScores, activeSkill ?: "", screenText ?: "")
+        if (!isReady()) {
             callback.onResult(Result(fallback.type, fallback.argument, "", fallback.confidence, false))
             return
         }
 
+        val modelHypotheses = filterHypothesesForModel(hypotheses)
         executor.execute {
             if (closed || !isReady()) {
                 callback.onResult(Result(fallback.type, fallback.argument, "", fallback.confidence, false))
                 return@execute
             }
             try {
-                val prompt = buildPrompt(safeCandidates, confidences, screenText, activeSkill)
-                // LiteRT-LM 0.14 exposes Message as a printable value; its Kotlin API docs
-                // demonstrate consuming the returned Message through toString()/print.
+                val prompt = buildPrompt(modelHypotheses, screenText, activeSkill)
+                // LiteRT-LM 0.14 documents Message as directly printable/toString consumable.
                 val raw = conversation!!.sendMessage(prompt).toString()
-                val parsed = parseModelResult(raw, fallback)
+                var parsed = parseModelResult(raw, fallback)
+                if (isActionable(parsed.type) && !hasReliableSpeech(modelHypotheses)) {
+                    parsed = Result(
+                        IntentAgent.Type.GENERAL,
+                        "",
+                        "No estoy lo bastante seguro de la orden. Repítela después de la señal.",
+                        0.40,
+                        true,
+                    )
+                }
                 callback.onResult(parsed)
             } catch (t: Throwable) {
                 callback.onResult(Result(fallback.type, fallback.argument, "", fallback.confidence, false))
@@ -147,19 +174,59 @@ class LocalLanguageAgent(
         }
     }
 
+    /** Removes low-probability alternates so a distant hypothesis cannot become a device action. */
+    private fun filterHypothesesForModel(all: List<Hypothesis>): List<Hypothesis> {
+        val measured = all.mapNotNull { it.score }
+        if (measured.isEmpty()) return all
+        val best = measured.maxOrNull() ?: return all
+        val floor = max(MIN_ACTION_SPEECH_CONFIDENCE, best - 0.20f)
+        val filtered = all.filter { it.score == null || it.score >= floor }
+        return if (filtered.isNotEmpty()) filtered else listOf(all.first())
+    }
+
+    private fun hasReliableSpeech(hypotheses: List<Hypothesis>): Boolean {
+        val measured = hypotheses.mapNotNull { it.score }
+        return measured.isEmpty() || (measured.maxOrNull() ?: 0f) >= MIN_ACTION_SPEECH_CONFIDENCE
+    }
+
+    private fun isActionable(type: IntentAgent.Type): Boolean = when (type) {
+        IntentAgent.Type.LEARN_SKILL,
+        IntentAgent.Type.USE_SKILL,
+        IntentAgent.Type.HIDE_OVERLAY,
+        IntentAgent.Type.SHOW_OVERLAY,
+        IntentAgent.Type.STOP_ASSISTANT,
+        IntentAgent.Type.PAUSE_LISTENING,
+        IntentAgent.Type.CONFIRM_CLICK,
+        IntentAgent.Type.CLICK,
+        IntentAgent.Type.LONG_CLICK,
+        IntentAgent.Type.TYPE_TEXT,
+        IntentAgent.Type.SCROLL_DOWN,
+        IntentAgent.Type.SCROLL_UP,
+        IntentAgent.Type.BACK,
+        IntentAgent.Type.HOME,
+        IntentAgent.Type.RECENTS,
+        IntentAgent.Type.NOTIFICATIONS,
+        IntentAgent.Type.QUICK_SETTINGS,
+        IntentAgent.Type.POWER_MENU,
+        IntentAgent.Type.LOCK_SCREEN,
+        IntentAgent.Type.SCREENSHOT,
+        IntentAgent.Type.OPEN_SETTINGS,
+        IntentAgent.Type.OPEN_APP -> true
+        else -> false
+    }
+
     private fun buildPrompt(
-        candidates: List<String>,
-        confidences: FloatArray?,
+        hypotheses: List<Hypothesis>,
         screenText: String?,
         activeSkill: String?,
     ): String {
-        val hypotheses = candidates.mapIndexed { index, s ->
-            val score = confidences?.getOrNull(index)
-            if (score != null && score >= 0f) "${index + 1}) ${clip(s, 180)} [conf=${String.format(Locale.US, "%.2f", score)}]"
-            else "${index + 1}) ${clip(s, 180)}"
+        val hypothesisText = hypotheses.mapIndexed { index, hypothesis ->
+            val score = hypothesis.score
+            if (score != null) "${index + 1}) ${clip(hypothesis.text, 180)} [conf=${String.format(Locale.US, "%.2f", score)}]"
+            else "${index + 1}) ${clip(hypothesis.text, 180)}"
         }.joinToString(" | ")
         return buildString {
-            append("Voz: ").append(hypotheses)
+            append("Voz: ").append(hypothesisText)
             append("\nHabilidad activa: ").append(clip(activeSkill ?: "", 80))
             append("\nApp activa: ").append(clip(AgentAccessibilityService.getActivePackageName(), 90))
             append("\nPantalla actual: ").append(clip(screenText ?: "", 520))
