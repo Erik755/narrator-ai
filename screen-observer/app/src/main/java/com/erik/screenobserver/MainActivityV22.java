@@ -15,8 +15,10 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
 import android.view.Gravity;
+import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
 public class MainActivityV22 extends Activity {
@@ -37,10 +39,15 @@ public class MainActivityV22 extends Activity {
     @Override public void onCreate(Bundle b) {
         super.onCreate(b);
         projectionManager = (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(34, 44, 34, 34);
         root.setGravity(Gravity.CENTER_HORIZONTAL);
+        scroll.addView(root, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         TextView title = new TextView(this);
         title.setText("Screen Observer Pro 2.2");
@@ -113,7 +120,7 @@ public class MainActivityV22 extends Activity {
                 Uri.parse("package:" + getPackageName()))));
         root.addView(appInfo);
 
-        setContentView(root);
+        setContentView(scroll);
         if (Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 4203);
@@ -173,8 +180,13 @@ public class MainActivityV22 extends Activity {
         style(accessibility,
                 access ? "1. CONTROL DE PANTALLA: ACTIVO" : "1. ACTIVAR CONTROL DE PANTALLA",
                 access ? GREEN : RED, true);
-        accessStatus.setText(access ? "Control de pantalla: activo · Accesibilidad + OCR disponibles."
-                : "Control de pantalla: pendiente.");
+        if (access && running) {
+            accessStatus.setText("Control de pantalla: activo · Accesibilidad + OCR disponibles.");
+        } else if (access) {
+            accessStatus.setText("Control de pantalla: activo · OCR estará disponible al iniciar el asistente.");
+        } else {
+            accessStatus.setText("Control de pantalla: pendiente.");
+        }
         style(start, running ? "2. ASISTENTE: ACTIVO" : "2. INICIAR MONITOREO + ESCUCHA",
                 running ? GREEN : BLUE, !running);
         style(overlay, ov ? "MINI VENTANA: VISIBLE · TOCAR PARA OCULTAR"
