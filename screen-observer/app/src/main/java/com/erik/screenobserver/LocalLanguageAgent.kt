@@ -136,8 +136,9 @@ class LocalLanguageAgent(
             }
             try {
                 val prompt = buildPrompt(safeCandidates, confidences, screenText, activeSkill)
-                val message = conversation!!.sendMessage(prompt)
-                val raw = message.text ?: message.toString()
+                // LiteRT-LM 0.14 exposes Message as a printable value; its Kotlin API docs
+                // demonstrate consuming the returned Message through toString()/print.
+                val raw = conversation!!.sendMessage(prompt).toString()
                 val parsed = parseModelResult(raw, fallback)
                 callback.onResult(parsed)
             } catch (t: Throwable) {
