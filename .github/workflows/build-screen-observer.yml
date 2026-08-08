@@ -37,6 +37,7 @@ jobs:
           python3 patch_v24.py
           python3 patch_v24_fix.py
           python3 patch_v24_review_fixes.py
+          python3 patch_v25_anchor_fix.py
           python3 patch_v25.py
           python3 patch_v25_fix.py
       - name: Validate generated v2.5 runtime
