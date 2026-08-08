@@ -1,9 +1,7 @@
 package com.erik.screenobserver;
 
-import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -23,13 +21,17 @@ public final class IntentAgent {
         public final String argument;
         public final String raw;
         public final double confidence;
+
         Result(Type type, String argument, String raw, double confidence) {
             this.type = type;
             this.argument = argument == null ? "" : argument.trim();
             this.raw = raw == null ? "" : raw;
             this.confidence = confidence;
         }
-        @Override public String toString() { return type + "(" + argument + ")@" + confidence; }
+
+        @Override public String toString() {
+            return type + "(" + argument + ")@" + confidence;
+        }
     }
 
     private static final double MIN_MEASURED_ACTION_CONFIDENCE = 0.30;
@@ -45,14 +47,17 @@ public final class IntentAgent {
     private static final Pattern LONG_CLICK = Pattern.compile(
             "(?iu)(?:manten\\s+presionado|mantén\\s+presionado|deja\\s+presionado|presiona\\s+y\\s+manten|presiona\\s+y\\s+mantén)\\s+(?:el\\s+boton\\s+)?(.+)$");
     private static final Pattern CONFIRM = Pattern.compile(
-            "(?iu)(?:confirma(?:\\s+que)?\\s+)(?:pulsa|toca|presiona|oprime|selecciona|elige)?\\s*(.+)$");
+            "(?iu)(?:confirma(?:\\s+que)?\\s+)(?:pulsa|toca|presiona|oprime|selecciona|elige|manten\\s+presionado|mantén\\s+presionado)?\\s*(.+)$");
     private static final Pattern OPEN_APP = Pattern.compile(
             "(?iu)^(?:abre|inicia|lanza|ejecuta)\\s+(?:la\\s+)?(?:app|aplicacion|aplicación)?\\s*(.+)$");
 
     private IntentAgent() { }
 
-    public static Result interpret(List<String> candidates, float[] confidences, String activeSkill, String screenText) {
-        if (candidates == null || candidates.isEmpty()) return new Result(Type.GENERAL, "", "", 0);
+    public static Result interpret(List<String> candidates, float[] confidences,
+                                   String activeSkill, String screenText) {
+        if (candidates == null || candidates.isEmpty()) {
+            return new Result(Type.GENERAL, "", "", 0);
+        }
 
         Result best = null;
         for (int i = 0; i < candidates.size(); i++) {
@@ -62,8 +67,8 @@ public final class IntentAgent {
             double speechConfidence = measured ? confidences[i] : rankConfidence(i);
             Result semantic = parse(raw, activeSkill, screenText);
 
-            // Never allow a very-low-confidence alternative to become a device action merely
-            // because its words look imperative. This addresses the Codex P1 review finding.
+            // Device actions and persistent state changes are never selected from a very
+            // low-confidence speech hypothesis. This prevents accidental taps or learning.
             if (isActionable(semantic.type)) {
                 if (measured && speechConfidence < MIN_MEASURED_ACTION_CONFIDENCE) continue;
                 if (!measured && i >= 3) continue;
@@ -82,9 +87,9 @@ public final class IntentAgent {
     }
 
     public static Result interpret(String raw, String activeSkill, String screenText) {
-        List<String> a = new ArrayList<>();
-        a.add(raw);
-        return interpret(a, null, activeSkill, screenText);
+        List<String> candidates = new ArrayList<>();
+        candidates.add(raw);
+        return interpret(candidates, null, activeSkill, screenText);
     }
 
     private static double rankConfidence(int index) {
@@ -99,6 +104,8 @@ public final class IntentAgent {
 
     private static boolean isActionable(Type type) {
         switch (type) {
+            case LEARN_SKILL:
+            case USE_SKILL:
             case HIDE_OVERLAY:
             case SHOW_OVERLAY:
             case STOP_ASSISTANT:
@@ -142,18 +149,25 @@ public final class IntentAgent {
 
         Matcher m = LEARN.matcher(raw.trim());
         if (m.find()) return r(Type.LEARN_SKILL, cleanup(m.group(1)), raw, .93);
+
         if (has(n, "que habilidades tienes", "cuales son tus habilidades", "que sabes hacer", "lista tus habilidades", "que has aprendido"))
             return r(Type.LIST_SKILLS, "", raw, .88);
+
         if (has(n, "que aprendiste de", "que sabes de la habilidad", "que sabes sobre", "dime lo que sabes de")) {
-            String arg = afterAny(raw, "que aprendiste de", "qué aprendiste de", "que sabes de la habilidad", "qué sabes de la habilidad",
+            String arg = afterAny(raw,
+                    "que aprendiste de", "qué aprendiste de",
+                    "que sabes de la habilidad", "qué sabes de la habilidad",
                     "que sabes sobre", "qué sabes sobre", "dime lo que sabes de");
             return r(Type.SKILL_INFO, arg, raw, .87);
         }
+
         m = USE.matcher(raw.trim());
-        if (m.find() && (n.contains("habilidad") || n.contains("conocimiento") || n.startsWith("usa ") || n.startsWith("utiliza ")))
+        if (m.find() && (n.contains("habilidad") || n.contains("conocimiento")
+                || n.startsWith("usa ") || n.startsWith("utiliza ")))
             return r(Type.USE_SKILL, cleanup(m.group(1)), raw, .78);
 
-        if (has(n, "que botones ves", "que controles ves", "que puedo tocar", "que puedo pulsar", "que opciones puedo pulsar", "dime los botones", "que hay para tocar"))
+        if (has(n, "que botones ves", "que controles ves", "que puedo tocar", "que puedo pulsar",
+                "que opciones puedo pulsar", "dime los botones", "que hay para tocar"))
             return r(Type.DESCRIBE_CONTROLS, "", raw, .94);
 
         if (has(n, "abre notificaciones", "muestra notificaciones", "panel de notificaciones", "baja las notificaciones"))
@@ -172,10 +186,13 @@ public final class IntentAgent {
         m = CONFIRM.matcher(raw.trim());
         if (m.find() && n.startsWith("confirma"))
             return r(Type.CONFIRM_CLICK, cleanup(m.group(1)), raw, .94);
+
         m = LONG_CLICK.matcher(raw.trim());
         if (m.find()) return r(Type.LONG_CLICK, cleanupTarget(m.group(1)), raw, .96);
+
         m = TYPE.matcher(raw.trim());
         if (m.find()) return r(Type.TYPE_TEXT, m.group(1).trim(), raw, .96);
+
         m = CLICK.matcher(raw.trim());
         if (m.find()) return r(Type.CLICK, cleanupTarget(m.group(1)), raw, .95);
 
@@ -201,39 +218,41 @@ public final class IntentAgent {
                 "explicame la pantalla", "que aparece en pantalla"))
             return r(Type.DESCRIBE_SCREEN, "", raw, .94);
 
-        boolean gameContext = normalize(activeSkill).contains("ajedrez") || normalize(screenText).contains("chess")
+        boolean gameContext = normalize(activeSkill).contains("ajedrez")
+                || normalize(screenText).contains("chess")
                 || normalize(screenText).contains("ajedrez");
         if (has(n, "que hago", "que debo hacer", "que me recomiendas", "aconsejame", "cual elijo", "que opcion",
                 "que conviene", "cual es mejor", "dime que hacer", "ayudame a decidir")
                 || (gameContext && has(n, "que jugada", "cual jugada", "que movimiento", "cual movimiento", "como juego",
-                "que muevo", "cual muevo", "mi siguiente jugada", "mejor jugada", "mejor movimiento", "mi mejor movimiento")))
+                        "que muevo", "cual muevo", "mi siguiente jugada", "mejor jugada", "mejor movimiento", "mi mejor movimiento")))
             return r(Type.ADVICE, "", raw, .90);
 
         m = OPEN_APP.matcher(raw.trim());
         if (m.find()) return r(Type.OPEN_APP, cleanup(m.group(1)), raw, .86);
 
-        if (nearAnyToken(n, new String[]{"pulsa", "toca", "presiona", "oprime", "elige", "selecciona"}, 1)) {
-            String[] w = raw.trim().split("\\s+", 2);
-            if (w.length == 2) return r(Type.CLICK, cleanupTarget(w[1]), raw, .68);
-        }
-        if (nearAnyToken(n, new String[]{"escribe", "teclea", "ingresa"}, 1)) {
-            String[] w = raw.trim().split("\\s+", 2);
-            if (w.length == 2) return r(Type.TYPE_TEXT, w[1], raw, .67);
-        }
+        String approximateClick = wordsAfterApproxToken(raw,
+                new String[]{"pulsa", "toca", "presiona", "oprime", "elige", "selecciona"}, 1);
+        if (!approximateClick.isEmpty())
+            return r(Type.CLICK, cleanupTarget(approximateClick), raw, .68);
+
+        String approximateType = wordsAfterApproxToken(raw,
+                new String[]{"escribe", "teclea", "ingresa"}, 1);
+        if (!approximateType.isEmpty())
+            return r(Type.TYPE_TEXT, approximateType, raw, .67);
 
         return r(Type.GENERAL, "", raw, .35);
     }
 
-    private static Result r(Type t, String a, String raw, double c) { return new Result(t, a, raw, Math.min(.999, c)); }
-
-    public static String normalize(String value) {
-        if (value == null) return "";
-        String n = Normalizer.normalize(value.toLowerCase(Locale.ROOT), Normalizer.Form.NFD).replaceAll("\\p{M}+", "");
-        return n.replaceAll("[^a-z0-9ñ ]", " ").replaceAll("\\s+", " ").trim();
+    private static Result r(Type t, String a, String raw, double c) {
+        return new Result(t, a, raw, Math.min(.999, c));
     }
 
-    private static boolean has(String n, String... xs) {
-        for (String x : xs) if (n.contains(normalize(x))) return true;
+    public static String normalize(String value) {
+        return TextNormalizer.normalize(value);
+    }
+
+    private static boolean has(String normalized, String... options) {
+        for (String option : options) if (normalized.contains(normalize(option))) return true;
         return false;
     }
 
@@ -247,29 +266,55 @@ public final class IntentAgent {
         return x.trim();
     }
 
+    /** Extracts words after a prefix wherever that prefix occurs in the utterance. */
     private static String afterAny(String raw, String... prefixes) {
-        String nr = normalize(raw);
-        for (String p : prefixes) {
-            String np = normalize(p);
-            if (nr.contains(np)) {
-                String[] rw = raw.trim().split("\\s+");
-                String[] pw = p.trim().split("\\s+");
-                if (rw.length > pw.length) {
-                    StringBuilder b = new StringBuilder();
-                    for (int i = pw.length; i < rw.length; i++) {
-                        if (b.length() > 0) b.append(' ');
-                        b.append(rw[i]);
+        if (raw == null) return "";
+        String[] rawWords = raw.trim().split("\\s+");
+        String[] normalizedWords = normalize(raw).split(" ");
+        int usableWords = Math.min(rawWords.length, normalizedWords.length);
+
+        for (String prefix : prefixes) {
+            String normalizedPrefix = normalize(prefix);
+            if (normalizedPrefix.isEmpty()) continue;
+            String[] prefixWords = normalizedPrefix.split(" ");
+            for (int start = 0; start + prefixWords.length <= usableWords; start++) {
+                boolean matches = true;
+                for (int j = 0; j < prefixWords.length; j++) {
+                    if (!normalizedWords[start + j].equals(prefixWords[j])) {
+                        matches = false;
+                        break;
                     }
-                    return cleanup(b.toString());
+                }
+                if (matches) return cleanup(joinWords(rawWords, start + prefixWords.length));
+            }
+        }
+        return "";
+    }
+
+    /** Finds the actual approximate command token and returns only the words after it. */
+    private static String wordsAfterApproxToken(String raw, String[] targets, int maxDistance) {
+        if (raw == null) return "";
+        String[] rawWords = raw.trim().split("\\s+");
+        String[] normalizedWords = normalize(raw).split(" ");
+        int usableWords = Math.min(rawWords.length, normalizedWords.length);
+        for (int i = 0; i < usableWords; i++) {
+            for (String target : targets) {
+                if (distance(normalizedWords[i], normalize(target)) <= maxDistance) {
+                    return cleanup(joinWords(rawWords, i + 1));
                 }
             }
         }
         return "";
     }
 
-    private static boolean nearAnyToken(String n, String[] targets, int max) {
-        for (String token : n.split(" ")) for (String t : targets) if (distance(token, t) <= max) return true;
-        return false;
+    private static String joinWords(String[] words, int start) {
+        if (words == null || start >= words.length) return "";
+        StringBuilder out = new StringBuilder();
+        for (int i = Math.max(0, start); i < words.length; i++) {
+            if (out.length() > 0) out.append(' ');
+            out.append(words[i]);
+        }
+        return out.toString();
     }
 
     private static int distance(String a, String b) {
@@ -277,9 +322,14 @@ public final class IntentAgent {
         for (int j = 0; j <= b.length(); j++) prev[j] = j;
         for (int i = 1; i <= a.length(); i++) {
             cur[0] = i;
-            for (int j = 1; j <= b.length(); j++)
-                cur[j] = Math.min(Math.min(cur[j - 1] + 1, prev[j] + 1), prev[j - 1] + (a.charAt(i - 1) == b.charAt(j - 1) ? 0 : 1));
-            int[] tmp = prev; prev = cur; cur = tmp;
+            for (int j = 1; j <= b.length(); j++) {
+                cur[j] = Math.min(
+                        Math.min(cur[j - 1] + 1, prev[j] + 1),
+                        prev[j - 1] + (a.charAt(i - 1) == b.charAt(j - 1) ? 0 : 1));
+            }
+            int[] tmp = prev;
+            prev = cur;
+            cur = tmp;
         }
         return prev[b.length()];
     }
