@@ -207,8 +207,8 @@ class LocalLanguageAgent(
 
         var url = URL(MODEL_URL)
         var connection: HttpURLConnection? = null
-        repeat(6) {
-            connection = (url.openConnection() as HttpURLConnection).apply {
+        for (hop in 0..5) {
+            val current = (url.openConnection() as HttpURLConnection).apply {
                 instanceFollowRedirects = false
                 connectTimeout = 20_000
                 readTimeout = 45_000
@@ -216,45 +216,51 @@ class LocalLanguageAgent(
                 setRequestProperty("User-Agent", "ScreenObserverPro/2.3")
                 setRequestProperty("Accept", "application/octet-stream")
             }
-            val code = connection!!.responseCode
+            val code = current.responseCode
             if (code in 300..399) {
-                val location = connection!!.getHeaderField("Location") ?: throw IllegalStateException("Redirect sin destino")
-                connection!!.disconnect()
+                val location = current.getHeaderField("Location")
+                    ?: run { current.disconnect(); throw IllegalStateException("Redirect sin destino") }
+                current.disconnect()
                 url = URL(url, location)
-            } else {
-                return@repeat
+                continue
             }
+            connection = current
+            break
         }
 
-        val conn = connection ?: throw IllegalStateException("Sin conexión")
+        val conn = connection ?: throw IllegalStateException("Demasiadas redirecciones")
         if (conn.responseCode !in 200..299) {
+            val code = conn.responseCode
             conn.disconnect()
-            throw IllegalStateException("HTTP ${conn.responseCode}")
+            throw IllegalStateException("HTTP $code")
         }
         val total = conn.contentLengthLong
         var copied = 0L
         var lastPercent = -10
-        conn.inputStream.use { input ->
-            FileOutputStream(part).use { output ->
-                val buffer = ByteArray(1024 * 1024)
-                while (true) {
-                    val n = input.read(buffer)
-                    if (n < 0) break
-                    output.write(buffer, 0, n)
-                    copied += n
-                    if (total > 0) {
-                        val pct = ((copied * 100) / total).toInt()
-                        if (pct >= lastPercent + 5) {
-                            lastPercent = pct
-                            updateStatus("Descargando IA local… ${pct.coerceAtMost(100)}%")
+        try {
+            conn.inputStream.use { input ->
+                FileOutputStream(part).use { output ->
+                    val buffer = ByteArray(1024 * 1024)
+                    while (true) {
+                        val n = input.read(buffer)
+                        if (n < 0) break
+                        output.write(buffer, 0, n)
+                        copied += n
+                        if (total > 0) {
+                            val pct = ((copied * 100) / total).toInt()
+                            if (pct >= lastPercent + 5) {
+                                lastPercent = pct
+                                updateStatus("Descargando IA local… ${pct.coerceAtMost(100)}%")
+                            }
                         }
+                        if (closed) throw InterruptedException("closed")
                     }
-                    if (closed) throw InterruptedException("closed")
+                    output.fd.sync()
                 }
-                output.fd.sync()
             }
+        } finally {
+            conn.disconnect()
         }
-        conn.disconnect()
         if (part.length() < MIN_MODEL_BYTES) {
             part.delete()
             throw IllegalStateException("Modelo incompleto")
