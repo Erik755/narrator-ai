@@ -42,6 +42,7 @@ jobs:
           python3 patch_v25_fix.py
           python3 patch_v25_compile_fix.py
           python3 patch_v25_model_upgrade.py
+          python3 patch_v25_review_fixes.py
       - name: Validate generated v2.5 runtime
         working-directory: screen-observer
         run: |
@@ -54,6 +55,7 @@ jobs:
           c = Path('app/src/main/java/com/erik/screenobserver/AndroidAppController.java').read_text()
           b = Path('app/src/main/java/com/erik/screenobserver/BlackjackEngine.java').read_text()
           p = Path('app/src/main/java/com/erik/screenobserver/PhoneCommandPlanner.java').read_text()
+          m = Path('app/src/main/java/com/erik/screenobserver/MainActivity.java').read_text()
 
           action_pos = s.find('if (ACTION_TEXT_COMMAND.equals(action))')
           projection_pos = s.find('if (projection != null) return START_NOT_STICKY;')
@@ -66,33 +68,42 @@ jobs:
               'typed action precedes projection gate': action_pos >= 0 and projection_pos >= 0 and action_pos < projection_pos,
               'typed channel independent of mic pause': 'typedCommandsAvailable()' in s and 'return runningState;' in s and 'if (!listeningEnabled)' not in handler,
               'deterministic plan first': 'PhoneCommandPlanner.plan(typed' in handler,
+              'conversational multi-segment gate': 'allCommandSteps' in handler,
               'multi-step typed commands': 'executeCommandPlan' in s,
+              'state-aware app sequence': 'executePlanOpenApp' in s and 'waitForPlanAppReady' in s and 'packageChanged' in s,
+              'sensitive chain stop': 'La secuencia se detuvo porque una acción requiere confirmación' in s,
               'pause explains text remains active': 'La entrada escrita sigue activa' in s,
               'resume listening': 'case RESUME_LISTENING:' in s,
-              'search skill': 'case SEARCH:' in s and 'searchCurrentApp' in s,
+              'safe search skill': 'case SEARCH:' in s and 'searchCurrentApp' in s and 'no escribiré en otro campo' in s,
               'volume skills': 'case VOLUME_UP:' in s and 'adjustVolume' in s,
               'swipe skills': 'swipeLeft()' in a and 'swipeRight()' in a,
               'ordinal controls': 'clickOrdinal' in a and 'case CLICK_ORDINAL:' in s,
+              'sensitive ordinal guard': 'sensitiveScreenContext()' in s and 'no seleccionaré por posición' in s,
               'settings sections': 'openSettingsSection' in c and 'case OPEN_SETTINGS_SECTION:' in s,
               'notification settings action valid': 'Settings.ACTION_ALL_APPS_NOTIFICATION_SETTINGS' in c and 'Settings.ACTION_NOTIFICATION_SETTINGS' not in c,
               'url opening': 'openUrl' in c and 'case OPEN_URL:' in s,
               'blackjack engine': 'recommendHard' in b and 'recommendSoft' in b and 'recommendPair' in b,
+              'strict dealer OCR': 'Never cross another field label' in b,
+              'double availability parsing': 'canDoubleFromText' in b,
+              'negated real-money handling': 'sin dinero real' in b and 'Explicit negation wins' in b,
               'blackjack advice': 'case BLACKJACK_ADVICE:' in s,
               'practice-only blackjack actuation': 'BlackjackEngine.isPracticeContext' in s and 'BlackjackEngine.isRealMoneyContext' in s,
               'phone command planner': 'class PhoneCommandPlanner' in p,
               'expanded parser': 'BLACKJACK_PLAY' in i and 'OPEN_SETTINGS_SECTION' in i and 'VOLUME_MUTE' in i,
+              'imperative-only deterministic additions': 'startsCommand' in i,
               'model action safety': 'IntentAgent.Type.BLACKJACK_PLAY -> true' in l and 'hasReliableSpeech(hypotheses)' in l,
               'neutral typed/voice model input': 'Entrada del usuario:' in l,
               'enhanced 1.7B AI tier': 'Qwen3_1.7B.litertlm' in l and 'Qwen3 1.7B mejorada' in l,
               'memory and storage gate': 'ENHANCED_MIN_RAM_BYTES' in l and 'ENHANCED_MIN_FREE_BYTES' in l and 'supportsEnhancedModel()' in l,
               'enhanced model fallback': 'listOf(ENHANCED_MODEL, STANDARD_MODEL)' in l and 'IA mejorada no disponible; usando modelo ligero' in l,
+              '2.5 runtime branding': 'Screen Observer Pro 2.4' not in m + s + l and 'ScreenObserverPro/2.4' not in l,
           }
           failed = [name for name, ok in checks.items() if not ok]
           if failed:
               raise SystemExit('v2.5 generated runtime validation failed: ' + ', '.join(failed))
           print('PASS generated v2.5 runtime checks:', len(checks))
           PY
-      - name: Test local intent and conversation fallback
+      - name: Test local intent, phone commands and blackjack
         working-directory: screen-observer
         run: |
           rm -rf build/local-tests
@@ -107,10 +118,12 @@ jobs:
             app/src/main/java/com/erik/screenobserver/ConversationEngine.java \
             local-tests/AgentUnderstandingTest.java \
             local-tests/PhoneCommandMatrixTest.java \
-            local-tests/BlackjackEngineTest.java
+            local-tests/BlackjackEngineTest.java \
+            local-tests/V25ReviewRegressionTest.java
           java -cp build/local-tests AgentUnderstandingTest
           java -cp build/local-tests PhoneCommandMatrixTest
           java -cp build/local-tests BlackjackEngineTest
+          java -cp build/local-tests V25ReviewRegressionTest
       - name: Build debug APK
         working-directory: screen-observer
         run: gradle --no-daemon assembleDebug
