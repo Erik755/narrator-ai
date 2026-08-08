@@ -16,17 +16,16 @@ public final class CaptureGeometry {
     }
 
     /**
-     * OCR coordinates can be mapped directly to device gesture coordinates only when the
-     * captured content has essentially the same aspect ratio as the current device screen.
-     * App-window sharing often violates this, so visual tapping is disabled there rather
-     * than risking a tap on the wrong control. Accessibility actions remain available.
+     * OCR coordinates are allowed to drive gestures only when captured content is effectively
+     * the full display. Similar aspect ratio is not enough: an app-only share can omit system
+     * bars and therefore have a different coordinate origin. Accessibility actions remain
+     * available whenever this conservative visual-tap path is disabled.
      */
     public static boolean isDirectScreenMappingSafe(int contentWidth, int contentHeight,
                                                     int screenWidth, int screenHeight) {
         if (contentWidth <= 0 || contentHeight <= 0 || screenWidth <= 0 || screenHeight <= 0) return false;
-        double contentAspect = (double) contentWidth / contentHeight;
-        double screenAspect = (double) screenWidth / screenHeight;
-        double ratio = contentAspect / screenAspect;
-        return Math.abs(Math.log(ratio)) <= 0.10;
+        double widthError = Math.abs(contentWidth - screenWidth) / (double) screenWidth;
+        double heightError = Math.abs(contentHeight - screenHeight) / (double) screenHeight;
+        return widthError <= 0.02 && heightError <= 0.02;
     }
 }
