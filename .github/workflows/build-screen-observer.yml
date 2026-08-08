@@ -44,6 +44,7 @@ jobs:
           python3 patch_v25_model_upgrade.py
           python3 patch_v25_review_fixes.py
           python3 patch_v25_branding_fix.py
+          python3 patch_v25_settings_phrase_fix.py
       - name: Validate generated v2.5 runtime
         working-directory: screen-observer
         run: |
@@ -81,6 +82,7 @@ jobs:
               'ordinal controls': 'clickOrdinal' in a and 'case CLICK_ORDINAL:' in s,
               'sensitive ordinal guard': 'sensitiveScreenContext()' in s and 'no seleccionaré por posición' in s,
               'settings sections': 'openSettingsSection' in c and 'case OPEN_SETTINGS_SECTION:' in s,
+              'explicit settings phrases': 'abre ajustes de wifi' in i and 'abre ajustes de bluetooth' in i,
               'notification settings action valid': 'Settings.ACTION_ALL_APPS_NOTIFICATION_SETTINGS' in c and 'Settings.ACTION_NOTIFICATION_SETTINGS' not in c,
               'url opening': 'openUrl' in c and 'case OPEN_URL:' in s,
               'blackjack engine': 'recommendHard' in b and 'recommendSoft' in b and 'recommendPair' in b,
