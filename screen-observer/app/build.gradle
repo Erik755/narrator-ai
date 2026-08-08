@@ -1,18 +1,31 @@
-plugins { id 'com.android.application' }
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
 
 android {
     namespace 'com.erik.screenobserver'
-    compileSdk 35
+    compileSdk 36
 
     defaultConfig {
         applicationId 'com.erik.screenobserver'
         minSdk 26
-        targetSdk 35
-        versionCode 8
-        versionName '2.1.0'
+        targetSdk 36
+        versionCode 10
+        versionName '2.3.0'
+    }
+
+    kotlinOptions {
+        jvmTarget = '21'
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
     }
 }
 
 dependencies {
     implementation 'com.google.mlkit:text-recognition:16.0.1'
+    implementation 'com.google.ai.edge.litertlm:litertlm-android:0.14.0'
 }

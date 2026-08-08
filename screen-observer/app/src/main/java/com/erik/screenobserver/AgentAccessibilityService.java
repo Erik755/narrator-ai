@@ -6,6 +6,7 @@ import android.content.Context;
 import android.graphics.Color;
 import android.graphics.Path;
 import android.graphics.drawable.GradientDrawable;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -80,6 +81,19 @@ public class AgentAccessibilityService extends AccessibilityService {
         }
     }
 
+    public boolean longClickText(String target) {
+        if (target == null || target.trim().isEmpty()) return false;
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root == null) return false;
+        String wanted = normalize(target);
+        try {
+            AccessibilityNodeInfo node = findMatchingNode(root, wanted);
+            return node != null && longClickNodeOrParent(node);
+        } finally {
+            root.recycle();
+        }
+    }
+
     public boolean tap(float x, float y) {
         if (x < 0 || y < 0) return false;
         try {
@@ -127,13 +141,22 @@ public class AgentAccessibilityService extends AccessibilityService {
     public boolean back() { return performGlobalAction(GLOBAL_ACTION_BACK); }
     public boolean home() { return performGlobalAction(GLOBAL_ACTION_HOME); }
     public boolean recents() { return performGlobalAction(GLOBAL_ACTION_RECENTS); }
+    public boolean notifications() { return performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS); }
+    public boolean quickSettings() { return performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS); }
+    public boolean powerDialog() { return performGlobalAction(GLOBAL_ACTION_POWER_DIALOG); }
+    public boolean lockScreen() {
+        return Build.VERSION.SDK_INT >= 28 && performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN);
+    }
+    public boolean screenshot() {
+        return Build.VERSION.SDK_INT >= 28 && performGlobalAction(GLOBAL_ACTION_TAKE_SCREENSHOT);
+    }
 
     public String listInteractiveElements() {
         AccessibilityNodeInfo root = getRootInActiveWindow();
         if (root == null) return "No puedo leer los controles de esta pantalla.";
         try {
             List<String> items = new ArrayList<>();
-            collectInteractive(root, items, 14);
+            collectInteractive(root, items, 16);
             if (items.isEmpty()) return "No encuentro controles accesibles. Puedo intentar localizarlos visualmente si tienen texto visible.";
             StringBuilder out = new StringBuilder("Controles visibles: ");
             for (String item : items) {
@@ -281,18 +304,37 @@ public class AgentAccessibilityService extends AccessibilityService {
         return null;
     }
 
+    /**
+     * Matches actuation targets only against stable identity fields. State descriptions are
+     * intentionally excluded: finding a switch because it is currently "On" and then clicking
+     * it would invert the requested state. View IDs are stripped to their resource name so the
+     * package prefix cannot accidentally satisfy short targets such as "ok".
+     */
     private boolean matchesNode(AccessibilityNodeInfo node, String target) {
         if (node == null || target.isEmpty()) return false;
         String text = normalize(node.getText() == null ? "" : node.getText().toString());
         String desc = normalize(node.getContentDescription() == null ? "" : node.getContentDescription().toString());
-        return (!text.isEmpty() && (text.equals(target) || text.contains(target) || target.contains(text)))
-                || (!desc.isEmpty() && (desc.equals(target) || desc.contains(target) || target.contains(desc)));
+        String hint = normalize(node.getHintText() == null ? "" : node.getHintText().toString());
+        String rawId = node.getViewIdResourceName() == null ? "" : node.getViewIdResourceName();
+        int slash = rawId.lastIndexOf('/');
+        String viewId = normalize(slash >= 0 ? rawId.substring(slash + 1).replace('_', ' ') : "");
+        return fieldMatches(text, target) || fieldMatches(desc, target) || fieldMatches(hint, target)
+                || idMatches(viewId, target);
+    }
+
+    private boolean fieldMatches(String field, String target) {
+        return !field.isEmpty() && (field.equals(target) || field.contains(target)
+                || (field.length() >= 3 && target.contains(field)));
+    }
+
+    private boolean idMatches(String field, String target) {
+        return !field.isEmpty() && (field.equals(target) || field.contains(target));
     }
 
     private boolean clickNodeOrParent(AccessibilityNodeInfo node) {
         AccessibilityNodeInfo current = node;
         int depth = 0;
-        while (current != null && depth < 6) {
+        while (current != null && depth < 7) {
             if (current.isClickable() && current.isEnabled()) {
                 return current.performAction(AccessibilityNodeInfo.ACTION_CLICK);
             }
@@ -300,6 +342,19 @@ public class AgentAccessibilityService extends AccessibilityService {
             depth++;
         }
         return node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+    }
+
+    private boolean longClickNodeOrParent(AccessibilityNodeInfo node) {
+        AccessibilityNodeInfo current = node;
+        int depth = 0;
+        while (current != null && depth < 7) {
+            if (current.isEnabled() && current.isLongClickable()) {
+                return current.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK);
+            }
+            current = current.getParent();
+            depth++;
+        }
+        return node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK);
     }
 
     private AccessibilityNodeInfo findEditable(AccessibilityNodeInfo node) {
@@ -330,13 +385,25 @@ public class AgentAccessibilityService extends AccessibilityService {
 
     private void collectInteractive(AccessibilityNodeInfo node, List<String> out, int max) {
         if (node == null || out.size() >= max) return;
-        boolean interesting = node.isClickable() || node.isEditable() || node.isCheckable();
+        boolean interesting = node.isClickable() || node.isEditable() || node.isCheckable()
+                || node.isScrollable() || node.isLongClickable();
         if (interesting) {
             String label = node.getText() == null ? "" : node.getText().toString().trim();
-            if (label.isEmpty() && node.getContentDescription() != null) {
-                label = node.getContentDescription().toString().trim();
+            if (label.isEmpty() && node.getContentDescription() != null) label = node.getContentDescription().toString().trim();
+            if (label.isEmpty() && node.getHintText() != null) label = node.getHintText().toString().trim();
+            if (label.isEmpty() && node.getViewIdResourceName() != null) {
+                String id = node.getViewIdResourceName();
+                int slash = id.lastIndexOf('/');
+                label = (slash >= 0 ? id.substring(slash + 1) : id).replace('_', ' ');
             }
-            if (!label.isEmpty() && !out.contains(label)) out.add(label);
+            if (!label.isEmpty()) {
+                String state = "";
+                if (node.isCheckable()) state = node.isChecked() ? " [activado]" : " [desactivado]";
+                else if (node.isEditable()) state = " [campo de texto]";
+                else if (node.isScrollable()) state = " [lista]";
+                String item = label + state;
+                if (!out.contains(item)) out.add(item);
+            }
         }
         for (int i = 0; i < node.getChildCount() && out.size() < max; i++) {
             AccessibilityNodeInfo child = node.getChild(i);

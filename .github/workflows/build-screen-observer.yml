@@ -21,13 +21,31 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
       - uses: android-actions/setup-android@v3
       - name: Install Android SDK
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.9'
+          gradle-version: '8.11.1'
+      - name: Apply v2.3 conversational runtime patch
+        working-directory: screen-observer
+        run: |
+          python3 patch_v23.py
+          python3 patch_safety_v23.py
+          python3 patch_voice_status_v23.py
+      - name: Test local intent and conversation fallback
+        working-directory: screen-observer
+        run: |
+          mkdir -p build/local-tests
+          javac -d build/local-tests \
+            app/src/main/java/com/erik/screenobserver/TextNormalizer.java \
+            app/src/main/java/com/erik/screenobserver/IntentAgent.java \
+            app/src/main/java/com/erik/screenobserver/AndroidSkillPack.java \
+            app/src/main/java/com/erik/screenobserver/CaptureGeometry.java \
+            app/src/main/java/com/erik/screenobserver/ConversationEngine.java \
+            local-tests/AgentUnderstandingTest.java
+          java -cp build/local-tests AgentUnderstandingTest
       - name: Build debug APK
         working-directory: screen-observer
         run: gradle --no-daemon assembleDebug

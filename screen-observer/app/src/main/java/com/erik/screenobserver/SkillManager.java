@@ -6,36 +6,82 @@ import android.content.SharedPreferences;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Locale;
 
 public class SkillManager {
     private static final String PREFS = "screen_observer_skills";
     private static final String KEY_SKILLS = "skills_json";
     private static final String KEY_ACTIVE = "active_skill";
+    private static final String LEGACY_ANDROID_SKILL = "Android 15 y 16";
 
     private final SharedPreferences prefs;
 
     public SkillManager(Context context) {
         prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        ensureBuiltInSkills();
+    }
+
+    /** Adds/upgrades the system skill while preserving any user-created skill with the old name. */
+    private synchronized void ensureBuiltInSkills() {
+        try {
+            JSONObject all = readAll();
+            String k = key(AndroidSkillPack.SKILL_NAME);
+            String oldKey = key(LEGACY_ANDROID_SKILL);
+            String active = prefs.getString(KEY_ACTIVE, "");
+
+            // Previous app versions used a user-collidable name. Remove that legacy entry only
+            // when it is positively marked as built-in. An unmarked user skill is never replaced.
+            if (!oldKey.equals(k)) {
+                JSONObject legacy = all.optJSONObject(oldKey);
+                if (legacy != null && legacy.optBoolean("builtin", false)) {
+                    all.remove(oldKey);
+                    if (oldKey.equals(active)) active = k;
+                }
+            }
+
+            JSONObject existing = all.optJSONObject(k);
+            int storedVersion = existing == null ? -1 : existing.optInt("builtinVersion", -1);
+            if (existing == null || !existing.optBoolean("builtin", false)
+                    || storedVersion != AndroidSkillPack.BUILTIN_VERSION) {
+                // If the new reserved display name somehow belongs to a user skill, preserve it
+                // and do not overwrite. This is safer than losing user-authored knowledge.
+                if (existing == null || existing.optBoolean("builtin", false)) {
+                    JSONObject skill = new JSONObject();
+                    skill.put("name", AndroidSkillPack.SKILL_NAME);
+                    skill.put("notes", AndroidSkillPack.builtInNotes());
+                    skill.put("sources", new JSONArray());
+                    skill.put("updatedAt", System.currentTimeMillis());
+                    skill.put("builtin", true);
+                    skill.put("builtinVersion", AndroidSkillPack.BUILTIN_VERSION);
+                    all.put(k, skill);
+                }
+            }
+
+            SharedPreferences.Editor editor = prefs.edit().putString(KEY_SKILLS, all.toString());
+            if (active != null && !active.isEmpty()) editor.putString(KEY_ACTIVE, active);
+            editor.apply();
+        } catch (Exception ignored) { }
     }
 
     public synchronized void saveSkill(String name, String notes, JSONArray sources) {
         if (name == null || name.trim().isEmpty()) return;
         try {
             JSONObject all = readAll();
+            String k = key(name);
+            JSONObject existing = all.optJSONObject(k);
+            if (existing != null && existing.optBoolean("builtin", false)) return;
+
             JSONObject skill = new JSONObject();
             skill.put("name", name.trim());
             skill.put("notes", notes == null ? "" : notes);
             skill.put("sources", sources == null ? new JSONArray() : sources);
             skill.put("updatedAt", System.currentTimeMillis());
-            all.put(key(name), skill);
+            all.put(k, skill);
             prefs.edit()
                     .putString(KEY_SKILLS, all.toString())
-                    .putString(KEY_ACTIVE, key(name))
+                    .putString(KEY_ACTIVE, k)
                     .apply();
         } catch (Exception ignored) { }
     }
@@ -63,8 +109,7 @@ public class SkillManager {
     }
 
     public synchronized String getActiveSkillNotes() {
-        String name = getActiveSkillName();
-        return getSkillNotes(name);
+        return getSkillNotes(getActiveSkillName());
     }
 
     public synchronized String getSkillNotes(String name) {
@@ -107,9 +152,10 @@ public class SkillManager {
 
     public synchronized boolean deleteSkill(String name) {
         try {
-            JSONObject all = readAll();
             String k = key(name);
-            if (!all.has(k)) return false;
+            JSONObject all = readAll();
+            JSONObject existing = all.optJSONObject(k);
+            if (existing == null || existing.optBoolean("builtin", false)) return false;
             all.remove(k);
             SharedPreferences.Editor editor = prefs.edit().putString(KEY_SKILLS, all.toString());
             if (k.equals(prefs.getString(KEY_ACTIVE, ""))) editor.remove(KEY_ACTIVE);
@@ -132,6 +178,10 @@ public class SkillManager {
             String n = normalize(name);
             if (!n.isEmpty() && (normalized.contains(n) || n.contains(normalized))) return name;
         }
+        if (normalized.contains("android") || normalized.contains("telefono") || normalized.contains("celular")
+                || normalized.contains("pantalla") || normalized.contains("aplicacion") || normalized.contains("app")) {
+            return AndroidSkillPack.SKILL_NAME;
+        }
         return getActiveSkillName();
     }
 
@@ -149,10 +199,7 @@ public class SkillManager {
     }
 
     private static String normalize(String value) {
-        if (value == null) return "";
-        String n = Normalizer.normalize(value.toLowerCase(Locale.ROOT), Normalizer.Form.NFD)
-                .replaceAll("\\p{M}+", "");
-        return n.replaceAll("[^a-z0-9ñ ]", " ").replaceAll("\\s+", " ").trim();
+        return TextNormalizer.normalize(value);
     }
 
     private static String join(List<String> values, String separator) {
