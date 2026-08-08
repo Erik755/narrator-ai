@@ -31,20 +31,24 @@ public final class AgentUnderstandingTest {
         type("continúa", IntentAgent.Type.CLICK, "Continuar", "", "");
         type("toma una captura", IntentAgent.Type.SCREENSHOT, "", "", "");
         type("abre el menú de energía", IntentAgent.Type.POWER_MENU, "", "", "");
+        type("hay poca privacidad", IntentAgent.Type.GENERAL, "", "", "");
 
         lowConfidenceActionDoesNotWin();
         lowConfidenceSoleActionIsRejected();
+        lowConfidenceSkillMutationIsRejected();
         secondHypothesisCanWinWithoutScores();
         aliasesIncludeCommonAndroidLabels();
         androidContextIsDetected();
+        ordinaryGoogleAppIsNotSystemContext();
         captureSizingPreservesAspectRatio();
         rotationMappingIsSafe();
         appWindowMappingIsRejected();
+        nearAspectAppWindowIsRejected();
         conversationalReplyDoesNotEcho();
         conversationKeepsFollowUpContext();
         greetingIsNatural();
 
-        System.out.println("PASS " + passed + "/" + passed);
+        System.out.println("PASS " + passed + " checks");
     }
 
     private static void type(String spoken, IntentAgent.Type expected, String arg,
@@ -76,6 +80,15 @@ public final class AgentUnderstandingTest {
         passed++;
     }
 
+    private static void lowConfidenceSkillMutationIsRejected() {
+        List<String> candidates = Arrays.asList("aprende banca");
+        float[] conf = new float[]{0.01f};
+        IntentAgent.Result r = IntentAgent.interpret(candidates, conf, "", "");
+        require(r.type == IntentAgent.Type.GENERAL,
+                "low confidence skill mutation must be rejected: " + r);
+        passed++;
+    }
+
     private static void secondHypothesisCanWinWithoutScores() {
         List<String> candidates = new ArrayList<>();
         candidates.add("tal vez necesito algo");
@@ -104,6 +117,12 @@ public final class AgentUnderstandingTest {
         passed++;
     }
 
+    private static void ordinaryGoogleAppIsNotSystemContext() {
+        require(!AndroidSkillPack.looksLikeAndroidContext("com.google.android.youtube", "Settings de video"),
+                "ordinary Google apps must not force the Android system skill");
+        passed++;
+    }
+
     private static void captureSizingPreservesAspectRatio() {
         int[] portrait = CaptureGeometry.targetSize(1080, 2400);
         require(portrait[1] == 1280, "long edge must be capped at 1280");
@@ -122,6 +141,12 @@ public final class AgentUnderstandingTest {
     private static void appWindowMappingIsRejected() {
         require(!CaptureGeometry.isDirectScreenMappingSafe(1000, 1000, 1080, 2400),
                 "square app-window capture must not be mapped to full-screen tap coordinates");
+        passed++;
+    }
+
+    private static void nearAspectAppWindowIsRejected() {
+        require(!CaptureGeometry.isDirectScreenMappingSafe(1080, 2200, 1080, 2400),
+                "app-only capture missing system bars must not be mapped as the full display");
         passed++;
     }
 
