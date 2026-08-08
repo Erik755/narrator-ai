@@ -36,6 +36,30 @@ jobs:
           python3 patch_voice_status_v23.py
           python3 patch_v24.py
           python3 patch_v24_fix.py
+          python3 patch_v24_review_fixes.py
+      - name: Validate generated v2.4 runtime
+        working-directory: screen-observer
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          a = Path('app/src/main/java/com/erik/screenobserver/AgentAccessibilityService.java').read_text()
+          s = Path('app/src/main/java/com/erik/screenobserver/ScreenAgentService22.java').read_text()
+          l = Path('app/src/main/java/com/erik/screenobserver/LocalLanguageAgent.kt').read_text()
+          k = Path('app/src/main/java/com/erik/screenobserver/SkillManager.java').read_text()
+          checks = {
+              'typed overlay input': 'EditText input = new EditText(this);' in a,
+              'typed command action': 'ACTION_TEXT_COMMAND' in s and 'handleTextCommand' in s,
+              'close app dispatch': 'case CLOSE_APP:' in s,
+              'current app learning': 'learnCurrentApp()' in s and 'recordLearningObservation' in s,
+              'speech reliability fast path': 'hasReliableSpeech(hypotheses)' in l,
+              'preserved skill sources': 'getSkillSourcesArray' in k and 'previousSources' in s,
+              'serialized research callback': 'main.post(() -> {' in s and '[Investigación gratuita]' in s,
+          }
+          failed = [name for name, ok in checks.items() if not ok]
+          if failed:
+              raise SystemExit('v2.4 generated runtime validation failed: ' + ', '.join(failed))
+          print('PASS generated v2.4 runtime checks:', len(checks))
+          PY
       - name: Test local intent and conversation fallback
         working-directory: screen-observer
         run: |
