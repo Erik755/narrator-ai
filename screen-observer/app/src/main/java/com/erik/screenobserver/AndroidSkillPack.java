@@ -1,11 +1,9 @@
 package com.erik.screenobserver;
 
-import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -14,6 +12,7 @@ import java.util.Map;
  */
 public final class AndroidSkillPack {
     public static final String SKILL_NAME = "Android 15 y 16";
+    public static final int BUILTIN_VERSION = 2;
 
     private static final Map<String, List<String>> CONTROL_ALIASES = new LinkedHashMap<>();
     static {
@@ -49,32 +48,44 @@ public final class AndroidSkillPack {
                 + "No intenta eludir FLAG_SECURE, bloqueos del sistema ni permisos que Android exija al usuario.";
     }
 
-    /** Returns target plus useful visual/accessibility synonyms, ordered by preference. */
+    /** Returns target plus the best matching Android control synonym family. */
     public static List<String> aliasesForTarget(String target) {
         List<String> out = new ArrayList<>();
         if (target != null && !target.trim().isEmpty()) out.add(target.trim());
         String n = normalize(target);
         if (n.isEmpty()) return out;
 
+        Map.Entry<String, List<String>> best = null;
+        int bestSpecificity = -1;
         for (Map.Entry<String, List<String>> entry : CONTROL_ALIASES.entrySet()) {
-            String key = entry.getKey();
-            boolean match = n.equals(key) || n.contains(key);
+            String key = normalize(entry.getKey());
+            boolean match = containsWholePhrase(n, key);
             if (!match) {
                 for (String alias : entry.getValue()) {
                     String a = normalize(alias);
-                    if (n.equals(a) || (a.length() > 3 && n.contains(a))) {
+                    if (!a.isEmpty() && containsWholePhrase(n, a)) {
                         match = true;
                         break;
                     }
                 }
             }
-            if (match) {
-                for (String alias : entry.getValue()) {
-                    if (!containsNormalized(out, alias)) out.add(alias);
-                }
+            if (match && key.length() > bestSpecificity) {
+                best = entry;
+                bestSpecificity = key.length();
+            }
+        }
+
+        if (best != null) {
+            for (String alias : best.getValue()) {
+                if (!containsNormalized(out, alias)) out.add(alias);
             }
         }
         return out;
+    }
+
+    private static boolean containsWholePhrase(String value, String phrase) {
+        if (value.equals(phrase)) return true;
+        return (" " + value + " ").contains(" " + phrase + " ");
     }
 
     /** Converts short conversational imperatives to likely Android control labels. */
@@ -106,9 +117,6 @@ public final class AndroidSkillPack {
     }
 
     public static String normalize(String value) {
-        if (value == null) return "";
-        String n = Normalizer.normalize(value.toLowerCase(Locale.ROOT), Normalizer.Form.NFD)
-                .replaceAll("\\p{M}+", "");
-        return n.replaceAll("[^a-z0-9ñ ]", " ").replaceAll("\\s+", " ").trim();
+        return TextNormalizer.normalize(value);
     }
 }
