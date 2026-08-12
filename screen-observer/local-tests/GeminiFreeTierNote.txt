@@ -1,0 +1,1 @@
+The app does not assume billing status. Gemini usage follows the quota/billing configuration of the API key's Google AI Studio project.
