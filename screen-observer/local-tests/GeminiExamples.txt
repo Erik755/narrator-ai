@@ -1,0 +1,10 @@
+Examples expected to be understood by Gemini:
+- abre la pantalla principal
+- cierra WhatsApp
+- abre WhatsApp y luego busca Erik
+- analiza este juego y aprende a usarlo
+- pausa la escucha
+- aunque el micrófono esté pausado, procesa esta instrucción escrita
+- abre los ajustes de bluetooth
+- qué debería hacer en esta pantalla
+- tengo 16 contra 10 en blackjack
