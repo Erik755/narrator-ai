@@ -1,0 +1,1 @@
+During remote inference the overlay may show "pensando con Gemini"; on remote failure the request falls back locally rather than being discarded.
