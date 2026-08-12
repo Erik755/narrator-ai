@@ -1,0 +1,1 @@
+CI validates Gemini wiring, encrypted key storage, absence of embedded API keys, local fallback, typed-command independence, existing Android command matrices, blackjack regressions, and full Android APK compilation.
