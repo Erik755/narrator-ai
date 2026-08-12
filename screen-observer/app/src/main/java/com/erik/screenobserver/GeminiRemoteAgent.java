@@ -26,11 +26,13 @@ import java.util.concurrent.Executors;
  * same IntentAgent actions already protected by the local Android executor.
  */
 public final class GeminiRemoteAgent implements AutoCloseable {
-    private static final String[] MODELS = {"gemini-3.6-flash", "gemini-3.5-flash-lite"};
+    // 3.5 Flash currently has an official Free Tier and is substantially stronger than the
+    // on-device fallback. Flash-Lite is a lower-cost/lower-capacity fallback for quota spikes.
+    private static final String[] MODELS = {"gemini-3.5-flash", "gemini-3.5-flash-lite"};
     private static final String ENDPOINT =
             "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent";
     private static final double MIN_ACTION_SPEECH_CONFIDENCE = 0.30;
-    private static final int MAX_MEMORY_TURNS = 8;
+    private static final int MAX_MEMORY_TURNS = 10;
 
     private final Context appContext;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -110,7 +112,7 @@ public final class GeminiRemoteAgent implements AutoCloseable {
         HttpURLConnection connection = (HttpURLConnection) new URL(String.format(Locale.US, ENDPOINT, model)).openConnection();
         connection.setRequestMethod("POST");
         connection.setConnectTimeout(15_000);
-        connection.setReadTimeout(35_000);
+        connection.setReadTimeout(40_000);
         connection.setDoOutput(true);
         connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
         connection.setRequestProperty("x-goog-api-key", key);
@@ -177,20 +179,22 @@ public final class GeminiRemoteAgent implements AutoCloseable {
             if (actions.length() > 0) actions.append(',');
             actions.append(type.name());
         }
-        return "Eres el cerebro principal de Screen Observer Pro, un agente Android privado. "
-                + "Entiende español natural, conversación, referencias como eso/ahí/el anterior y órdenes indirectas. "
-                + "No repitas ni parafrasees innecesariamente lo que dijo el usuario. Responde breve y natural. "
+        return "Eres el cerebro principal de Screen Observer Pro, un agente Android privado para Android 15 y 16. "
+                + "Entiende español natural, conversación de varios turnos, referencias como eso/ahí/el anterior/esa app y órdenes indirectas. "
+                + "No repitas ni parafrasees innecesariamente lo que dijo el usuario. Responde breve, natural y útil. "
                 + "Si el usuario quiere actuar en el teléfono, clasifica UNA siguiente acción segura usando exactamente uno de estos tipos: "
                 + actions + ". "
-                + "Ejemplos: pantalla principal/inicio = HOME; cerrar o salir de WhatsApp = CLOSE_APP; "
-                + "analiza este juego y aprende a usarlo = LEARN_CURRENT_APP; abre una app = OPEN_APP; "
-                + "buscar dentro de la app = SEARCH; desplazarse = SCROLL_DOWN/SCROLL_UP/SWIPE_LEFT/SWIPE_RIGHT; "
-                + "escribir = TYPE_TEXT; tocar = CLICK; ajustes específicos = OPEN_SETTINGS_SECTION; "
-                + "conversación o preguntas = GENERAL. Para GENERAL escribe la respuesta en reply. "
-                + "Para acciones deja reply vacío y coloca el objetivo exacto en argument. "
+                + "Mapeo importante: pantalla principal/inicio/home = HOME; atrás = BACK; recientes = RECENTS; "
+                + "cerrar o salir de WhatsApp u otra app = CLOSE_APP; analizar/estudiar este juego o app para aprenderlo = LEARN_CURRENT_APP; "
+                + "abrir una app = OPEN_APP; buscar dentro de la app = SEARCH; escribir texto = TYPE_TEXT; tocar un control = CLICK; "
+                + "desplazarse = SCROLL_DOWN/SCROLL_UP/SWIPE_LEFT/SWIPE_RIGHT; ajustes concretos = OPEN_SETTINGS_SECTION; "
+                + "notificaciones = NOTIFICATIONS; ajustes rápidos = QUICK_SETTINGS; volumen = VOLUME_UP/VOLUME_DOWN/VOLUME_MUTE/VOLUME_UNMUTE; "
+                + "conversación, explicaciones o preguntas que no requieren tocar Android = GENERAL. "
+                + "Para GENERAL escribe la respuesta natural en reply. Para acciones deja reply vacío y coloca el objetivo exacto en argument. "
+                + "Si el usuario da varios pasos, devuelve solo el PRIMER paso que corresponda al turno actual; el planificador local gestiona cadenas explícitas conocidas. "
                 + "No afirmes que una acción ya ocurrió: solo decide la intención; Android la ejecuta después. "
-                + "No inventes botones ni texto que no aparezcan en el contexto. Si falta información usa GENERAL y pregunta solo lo indispensable. "
-                + "Acciones sensibles seguirán requiriendo confirmación dentro de la app.";
+                + "No inventes botones, cartas, resultados ni texto que no aparezcan en el contexto. Si falta información usa GENERAL y pregunta solo lo indispensable. "
+                + "No solicites ni introduzcas contraseñas, PIN, OTP ni datos de pago. Las acciones sensibles quedan sujetas a confirmación local.";
     }
 
     private String buildUserPrompt(List<String> candidates, float[] confidences,
@@ -198,7 +202,7 @@ public final class GeminiRemoteAgent implements AutoCloseable {
         StringBuilder b = new StringBuilder();
         b.append("Entrada del usuario (hipótesis de voz o texto):\n");
         for (int i = 0; i < candidates.size(); i++) {
-            b.append(i + 1).append(") ").append(clip(candidates.get(i), 260));
+            b.append(i + 1).append(") ").append(clip(candidates.get(i), 320));
             if (confidences != null && i < confidences.length && confidences[i] >= 0f && confidences[i] <= 1f) {
                 b.append(" [conf=").append(String.format(Locale.US, "%.2f", confidences[i])).append(']');
             }
@@ -207,12 +211,12 @@ public final class GeminiRemoteAgent implements AutoCloseable {
         synchronized (memory) {
             if (!memory.isEmpty()) {
                 b.append("\nContexto reciente de conversación:\n");
-                for (String item : memory) b.append("- ").append(clip(item, 360)).append('\n');
+                for (String item : memory) b.append("- ").append(clip(item, 420)).append('\n');
             }
         }
-        b.append("\nHabilidad activa: ").append(clip(activeSkill, 120));
-        b.append("\nContexto actual del teléfono: ").append(clip(screenContext, 5000));
-        b.append("\nDecide la intención actual. Prioriza la hipótesis de voz con mayor confianza. Devuelve solo el objeto JSON solicitado.");
+        b.append("\nHabilidad activa: ").append(clip(activeSkill, 160));
+        b.append("\nContexto actual del teléfono (OCR, app y/o controles accesibles): ").append(clip(screenContext, 7000));
+        b.append("\nDecide la intención actual. Para voz, prioriza la hipótesis con mayor confianza. Devuelve solo el objeto JSON solicitado.");
         return b.toString();
     }
 
@@ -256,7 +260,7 @@ public final class GeminiRemoteAgent implements AutoCloseable {
         String n = type.name();
         return !(n.equals("GENERAL") || n.equals("HEARING_CHECK") || n.equals("DESCRIBE_SCREEN")
                 || n.equals("READ_SCREEN") || n.equals("ADVICE") || n.equals("LIST_SKILLS")
-                || n.equals("SKILL_INFO") || n.equals("DESCRIBE_CONTROLS"));
+                || n.equals("SKILL_INFO") || n.equals("DESCRIBE_CONTROLS") || n.equals("BLACKJACK_ADVICE"));
     }
 
     private void remember(String user, LocalLanguageAgent.Result result) {
@@ -264,7 +268,7 @@ public final class GeminiRemoteAgent implements AutoCloseable {
                 ? result.getReply()
                 : "acción " + result.getType().name() + (result.getArgument().isEmpty() ? "" : " → " + result.getArgument());
         synchronized (memory) {
-            memory.addLast("Usuario: " + clip(user, 220) + " | Asistente: " + clip(assistant, 260));
+            memory.addLast("Usuario: " + clip(user, 260) + " | Asistente: " + clip(assistant, 320));
             while (memory.size() > MAX_MEMORY_TURNS) memory.removeFirst();
         }
     }
