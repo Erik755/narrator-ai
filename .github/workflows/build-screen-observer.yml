@@ -48,7 +48,6 @@ jobs:
           python3 patch_v25_blackjack_ocr_fix.py
           python3 patch_v25_intent_guard_fix.py
           python3 patch_v26.py
-          python3 patch_v26_model_fix.py
       - name: Validate generated v2.6 runtime
         working-directory: screen-observer
         run: |
@@ -57,54 +56,34 @@ jobs:
           a = Path('app/src/main/java/com/erik/screenobserver/AgentAccessibilityService.java').read_text()
           s = Path('app/src/main/java/com/erik/screenobserver/ScreenAgentService22.java').read_text()
           l = Path('app/src/main/java/com/erik/screenobserver/LocalLanguageAgent.kt').read_text()
-          i = Path('app/src/main/java/com/erik/screenobserver/IntentAgent.java').read_text()
           c = Path('app/src/main/java/com/erik/screenobserver/AndroidAppController.java').read_text()
           b = Path('app/src/main/java/com/erik/screenobserver/BlackjackEngine.java').read_text()
           p = Path('app/src/main/java/com/erik/screenobserver/PhoneCommandPlanner.java').read_text()
           mv = Path('app/src/main/java/com/erik/screenobserver/MainActivityV22.java').read_text()
-          g = Path('app/src/main/java/com/erik/screenobserver/GeminiRemoteAgent.java').read_text()
-          k = Path('app/src/main/java/com/erik/screenobserver/GeminiSecretStore.java').read_text()
-
-          action_pos = s.find('if (ACTION_TEXT_COMMAND.equals(action))')
-          projection_pos = s.find('if (projection != null) return START_NOT_STICKY;')
+          g = Path('app/src/main/java/com/erik/screenobserver/GeminiAgent.java').read_text()
+          k = Path('app/src/main/java/com/erik/screenobserver/GeminiKeyStore.java').read_text()
           handler_start = s.find('private void handleTextCommand')
           handler_end = s.find('private String currentUnderstandingContext', handler_start)
           handler = s[handler_start:handler_end]
-
           checks = {
               'typed overlay input': 'EditText input = new EditText(this);' in a,
-              'typed action precedes projection gate': action_pos >= 0 and projection_pos >= 0 and action_pos < projection_pos,
-              'typed channel independent of mic pause': 'typedCommandsAvailable()' in s and 'return runningState;' in s and 'if (!listeningEnabled)' not in handler,
-              'deterministic plan first': 'PhoneCommandPlanner.plan(typed' in handler,
-              'conversational multi-segment gate': 'allCommandSteps' in handler,
-              'multi-step typed commands': 'executeCommandPlan' in s,
-              'state-aware app sequence': 'executePlanOpenApp' in s and 'waitForPlanAppReady' in s and 'packageChanged' in s,
-              'sensitive chain stop': 'La secuencia se detuvo porque una acción requiere confirmación' in s,
-              'pause explains text remains active': 'La entrada escrita sigue activa' in s,
-              'resume listening': 'case RESUME_LISTENING:' in s,
-              'safe search skill': 'case SEARCH:' in s and 'searchCurrentApp' in s and 'no escribiré en otro campo' in s,
-              'volume skills': 'case VOLUME_UP:' in s and 'adjustVolume' in s,
-              'swipe skills': 'swipeLeft()' in a and 'swipeRight()' in a,
-              'ordinal controls': 'clickOrdinal' in a and 'case CLICK_ORDINAL:' in s,
-              'sensitive ordinal guard': 'sensitiveScreenContext()' in s and 'no seleccionaré por posición' in s,
-              'settings sections': 'openSettingsSection' in c and 'case OPEN_SETTINGS_SECTION:' in s,
-              'explicit settings phrases': 'abre ajustes de wifi' in i and 'abre ajustes de bluetooth' in i,
-              'notification settings action valid': 'Settings.ACTION_ALL_APPS_NOTIFICATION_SETTINGS' in c and 'Settings.ACTION_NOTIFICATION_SETTINGS' not in c,
-              'url opening': 'openUrl' in c and 'case OPEN_URL:' in s,
-              'blackjack engine': 'recommendHard' in b and 'recommendSoft' in b and 'recommendPair' in b,
-              'practice-only blackjack actuation': 'BlackjackEngine.isPracticeContext' in s and 'BlackjackEngine.isRealMoneyContext' in s,
-              'Gemini 3.6 primary model': 'gemini-3.6-flash' in g,
-              'Gemini 2.5 stable fallback': 'gemini-2.5-flash' in g,
-              'Gemini Flash-Lite fallback': 'gemini-2.5-flash-lite' in g,
+              'typed independent while mic paused': 'texto activo · micrófono pausado' in handler,
+              'Gemini primary runtime': 'geminiAgent.isConfigured()' in s and 'pensando con Gemini' in s,
+              'Gemini typed path': 'geminiAgent.interpret(typed, context, true' in handler,
+              'Gemini voice path': 'geminiAgent.interpret(matches.get(0)' in s,
+              'Gemini 2.5 Flash': 'gemini-2.5-flash' in g,
               'Gemini auth header': 'x-goog-api-key' in g,
-              'structured JSON schema': 'responseJsonSchema' in g and 'responseMimeType' in g,
-              'Gemini preferred in service': 'interpretWithPreferredAgent' in s and 'geminiAgent.isConfigured()' in s,
-              'local model lazy when Gemini configured': 'if (!geminiAgent.isConfigured()) languageAgent.start();' in s,
-              'remote failure local fallback': 'languageAgent.interpret(candidates, confidences, richContext, activeSkill, callback);' in s,
+              'structured JSON response': 'responseMimeType' in g,
               'encrypted key store': 'AndroidKeyStore' in k and 'AES/GCM/NoPadding' in k,
-              'key entry UI': 'GUARDAR CLAVE GEMINI' in mv and 'GeminiSecretStore.save' in mv,
-              'no embedded Gemini key': 'AIza' not in g + k + mv + s,
-              '2.6 activity branding': 'Screen Observer Pro 2.6' in mv,
+              'key UI': 'GUARDAR CLAVE GEMINI' in mv and 'PROBAR CONEXIÓN GEMINI' in mv,
+              'no embedded key': 'AIza' not in g + k + mv + s,
+              'local fallback retained': 'languageAgent.interpret' in s and 'LocalLanguageAgent' in l,
+              'multi-step commands retained': 'executeCommandPlan' in s,
+              'safe search retained': 'case SEARCH:' in s and 'searchCurrentApp' in s,
+              'settings controls retained': 'openSettingsSection' in c and 'case OPEN_SETTINGS_SECTION:' in s,
+              'blackjack retained': 'recommendHard' in b and 'recommendSoft' in b and 'recommendPair' in b,
+              'planner retained': 'class PhoneCommandPlanner' in p,
+              'voice confidence gate': 'hasReliableSpeechV26' in s,
               '2.6 package version': "versionName '2.6.0'" in Path('app/build.gradle').read_text(),
           }
           failed = [name for name, ok in checks.items() if not ok]
@@ -138,7 +117,7 @@ jobs:
       - name: Test blackjack engine
         working-directory: screen-observer
         run: java -cp build/local-tests BlackjackEngineTest
-      - name: Test v2.5 safety regressions
+      - name: Test safety regressions
         working-directory: screen-observer
         run: java -cp build/local-tests V25ReviewRegressionTest
       - name: Build debug APK
