@@ -59,6 +59,7 @@ jobs:
           l = Path('app/src/main/java/com/erik/screenobserver/LocalLanguageAgent.kt').read_text()
           g = Path('app/src/main/java/com/erik/screenobserver/GeminiRemoteAgent.kt').read_text()
           k = Path('app/src/main/java/com/erik/screenobserver/GeminiKeyStore.java').read_text()
+          secret = Path('app/src/main/java/com/erik/screenobserver/GeminiSecretStore.java').read_text()
           i = Path('app/src/main/java/com/erik/screenobserver/IntentAgent.java').read_text()
           c = Path('app/src/main/java/com/erik/screenobserver/AndroidAppController.java').read_text()
           b = Path('app/src/main/java/com/erik/screenobserver/BlackjackEngine.java').read_text()
@@ -99,9 +100,10 @@ jobs:
               'Interactions generation config': 'generation_config' in g and 'thinking_level' in g and 'max_output_tokens' in g,
               'structured output new schema': 'response_format' in g and 'mime_type' in g and 'application/json' in g,
               'Gemini API auth header': 'x-goog-api-key' in g,
-              'encrypted key storage': 'AndroidKeyStore' in k and 'AES/GCM/NoPadding' in k,
+              'single encrypted key implementation': 'GeminiSecretStore.save' in k and 'GeminiSecretStore.load' in k,
+              'encrypted key storage': 'AndroidKeyStore' in secret and 'AES/GCM/NoPadding' in secret and '.setKeySize(256)' in secret,
               'no legacy plaintext key prefs': 'gemini_api_key' not in g and 'screen_observer_ai' not in g,
-              'no hardcoded Google key': 'AIza' not in g + k + l + m,
+              'no hardcoded Google key': 'AIza' not in g + k + secret + l + m,
               'sensitive cloud redaction': 'Pantalla sensible detectada' in g and 'isSensitiveContext' in g and 'contenido visual omitidos' in g,
               'Gemini key controls': 'GeminiRemoteAgent.saveApiKey' in m and 'PROBAR GEMINI' in m and 'BORRAR CLAVE' in m,
               'Gemini connection test': 'GeminiRemoteAgent.testApiKey' in m,
