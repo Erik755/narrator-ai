@@ -1,0 +1,1 @@
+Gemini is an intent/response brain only. AccessibilityService remains the execution layer and enforces existing action safeguards.
