@@ -1,0 +1,1 @@
+Provider order: Gemini 3.6 Flash -> Gemini 3.5 Flash-Lite -> local Qwen/LiteRT-LM -> deterministic IntentAgent fallback.
