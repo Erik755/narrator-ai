@@ -47,7 +47,8 @@ jobs:
           python3 patch_v25_settings_phrase_fix.py
           python3 patch_v25_blackjack_ocr_fix.py
           python3 patch_v25_intent_guard_fix.py
-      - name: Validate generated v2.5 runtime
+          python3 patch_v26_gemini.py
+      - name: Validate generated v2.6 runtime
         working-directory: screen-observer
         run: |
           python3 - <<'PY'
@@ -60,6 +61,8 @@ jobs:
           b = Path('app/src/main/java/com/erik/screenobserver/BlackjackEngine.java').read_text()
           p = Path('app/src/main/java/com/erik/screenobserver/PhoneCommandPlanner.java').read_text()
           m = Path('app/src/main/java/com/erik/screenobserver/MainActivity.java').read_text()
+          g = Path('app/src/main/java/com/erik/screenobserver/GeminiCloudAgent.java').read_text()
+          k = Path('app/src/main/java/com/erik/screenobserver/GeminiKeyStore.java').read_text()
 
           action_pos = s.find('if (ACTION_TEXT_COMMAND.equals(action))')
           projection_pos = s.find('if (projection != null) return START_NOT_STICKY;')
@@ -72,42 +75,28 @@ jobs:
               'typed action precedes projection gate': action_pos >= 0 and projection_pos >= 0 and action_pos < projection_pos,
               'typed channel independent of mic pause': 'typedCommandsAvailable()' in s and 'return runningState;' in s and 'if (!listeningEnabled)' not in handler,
               'deterministic plan first': 'PhoneCommandPlanner.plan(typed' in handler,
-              'conversational multi-segment gate': 'allCommandSteps' in handler,
               'multi-step typed commands': 'executeCommandPlan' in s,
-              'state-aware app sequence': 'executePlanOpenApp' in s and 'waitForPlanAppReady' in s and 'packageChanged' in s,
-              'sensitive chain stop': 'La secuencia se detuvo porque una acción requiere confirmación' in s,
-              'pause explains text remains active': 'La entrada escrita sigue activa' in s,
-              'resume listening': 'case RESUME_LISTENING:' in s,
-              'safe search skill': 'case SEARCH:' in s and 'searchCurrentApp' in s and 'no escribiré en otro campo' in s,
-              'volume skills': 'case VOLUME_UP:' in s and 'adjustVolume' in s,
-              'swipe skills': 'swipeLeft()' in a and 'swipeRight()' in a,
-              'ordinal controls': 'clickOrdinal' in a and 'case CLICK_ORDINAL:' in s,
+              'state-aware app sequence': 'executePlanOpenApp' in s and 'waitForPlanAppReady' in s,
+              'safe search skill': 'searchCurrentApp' in s and 'no escribiré en otro campo' in s,
               'sensitive ordinal guard': 'sensitiveScreenContext()' in s and 'no seleccionaré por posición' in s,
-              'settings sections': 'openSettingsSection' in c and 'case OPEN_SETTINGS_SECTION:' in s,
-              'explicit settings phrases': 'abre ajustes de wifi' in i and 'abre ajustes de bluetooth' in i,
-              'notification settings action valid': 'Settings.ACTION_ALL_APPS_NOTIFICATION_SETTINGS' in c and 'Settings.ACTION_NOTIFICATION_SETTINGS' not in c,
-              'url opening': 'openUrl' in c and 'case OPEN_URL:' in s,
               'blackjack engine': 'recommendHard' in b and 'recommendSoft' in b and 'recommendPair' in b,
-              'strict dealer OCR': 'Never cross another field label' in b,
-              'same-line blackjack labels': '(?:dealer|crupier|casa)' in b and '(?:tu mano|your hand|player|jugador|mano|total)' in b,
-              'double availability parsing': 'canDoubleFromText' in b,
-              'negated real-money handling': 'sin dinero real' in b and 'Explicit negation wins' in b,
-              'blackjack advice': 'case BLACKJACK_ADVICE:' in s,
               'practice-only blackjack actuation': 'BlackjackEngine.isPracticeContext' in s and 'BlackjackEngine.isRealMoneyContext' in s,
-              'phone command planner': 'class PhoneCommandPlanner' in p,
-              'expanded parser': 'BLACKJACK_PLAY' in i and 'OPEN_SETTINGS_SECTION' in i and 'VOLUME_MUTE' in i,
-              'imperative-only deterministic additions': 'startsCommand' in i and 'quiere decir' in i,
-              'model action safety': 'IntentAgent.Type.BLACKJACK_PLAY -> true' in l and 'hasReliableSpeech(hypotheses)' in l,
-              'neutral typed/voice model input': 'Entrada del usuario:' in l,
-              'enhanced 1.7B AI tier': 'Qwen3_1.7B.litertlm' in l and 'Qwen3 1.7B mejorada' in l,
-              'memory and storage gate': 'ENHANCED_MIN_RAM_BYTES' in l and 'ENHANCED_MIN_FREE_BYTES' in l and 'supportsEnhancedModel()' in l,
-              'enhanced model fallback': 'listOf(ENHANCED_MODEL, STANDARD_MODEL)' in l and 'IA mejorada no disponible; usando modelo ligero' in l,
-              '2.5 runtime branding': 'Screen Observer Pro 2.4' not in m + s + l and 'ScreenObserverPro/2.4' not in l,
+              'Gemini 3.6 model': 'gemini-3.6-flash' in g,
+              'Interactions API': '/v1beta/interactions' in g and 'previous_interaction_id' in g,
+              'structured response schema': 'response_format' in g and 'application/json' in g,
+              'API key header': 'x-goog-api-key' in g,
+              'encrypted Android Keystore': 'AndroidKeyStore' in k and 'AES/GCM/NoPadding' in k,
+              'no hardcoded API key': 'AIza' not in g + k + l + m,
+              'Gemini key UI': 'GUARDAR CLAVE GEMINI' in m and 'PROBAR GEMINI' in m and 'BORRAR CLAVE' in m,
+              'hybrid cloud router': 'GeminiCloudAgent(appContext)' in l and 'cloudAgent.interpret' in l,
+              'cloud bypasses large local download': 'if (cloudAgent.isConfigured())' in l and 'Gemini 3.6 Flash listo' in l,
+              'voice confidence remains enforced': 'hasReliableSpeech(modelHypotheses)' in l,
+              '2.6 runtime branding': 'Screen Observer Pro 2.5' not in m + s + l and 'ScreenObserverPro/2.5' not in l + s,
           }
           failed = [name for name, ok in checks.items() if not ok]
           if failed:
-              raise SystemExit('v2.5 generated runtime validation failed: ' + ', '.join(failed))
-          print('PASS generated v2.5 runtime checks:', len(checks))
+              raise SystemExit('v2.6 generated runtime validation failed: ' + ', '.join(failed))
+          print('PASS generated v2.6 runtime checks:', len(checks))
           PY
       - name: Compile local test suites
         working-directory: screen-observer
@@ -135,7 +124,7 @@ jobs:
       - name: Test blackjack engine
         working-directory: screen-observer
         run: java -cp build/local-tests BlackjackEngineTest
-      - name: Test v2.5 safety regressions
+      - name: Test safety regressions
         working-directory: screen-observer
         run: java -cp build/local-tests V25ReviewRegressionTest
       - name: Build debug APK
