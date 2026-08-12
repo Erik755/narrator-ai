@@ -1,0 +1,1 @@
+Remote HTTP/auth/quota failures should never lose the user's request: GeminiRemoteAgent returns usedModel=false so ScreenAgentService22 retries through the local agent.
