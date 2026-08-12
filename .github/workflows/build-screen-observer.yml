@@ -48,6 +48,7 @@ jobs:
           python3 patch_v25_blackjack_ocr_fix.py
           python3 patch_v25_intent_guard_fix.py
           python3 patch_v26.py
+          python3 patch_v26_model_fix.py
       - name: Validate generated v2.6 runtime
         working-directory: screen-observer
         run: |
@@ -93,7 +94,8 @@ jobs:
               'blackjack engine': 'recommendHard' in b and 'recommendSoft' in b and 'recommendPair' in b,
               'practice-only blackjack actuation': 'BlackjackEngine.isPracticeContext' in s and 'BlackjackEngine.isRealMoneyContext' in s,
               'Gemini 3.6 primary model': 'gemini-3.6-flash' in g,
-              'Gemini Flash-Lite fallback': 'gemini-3.5-flash-lite' in g,
+              'Gemini 2.5 stable fallback': 'gemini-2.5-flash' in g,
+              'Gemini Flash-Lite fallback': 'gemini-2.5-flash-lite' in g,
               'Gemini auth header': 'x-goog-api-key' in g,
               'structured JSON schema': 'responseJsonSchema' in g and 'responseMimeType' in g,
               'Gemini preferred in service': 'interpretWithPreferredAgent' in s and 'geminiAgent.isConfigured()' in s,
