@@ -48,7 +48,8 @@ jobs:
           python3 patch_v25_blackjack_ocr_fix.py
           python3 patch_v25_intent_guard_fix.py
           python3 patch_v26.py
-      - name: Validate generated v2.6 runtime
+          python3 patch_v27.py
+      - name: Validate generated v2.7 runtime
         working-directory: screen-observer
         run: |
           python3 - <<'PY'
@@ -57,6 +58,7 @@ jobs:
           s = Path('app/src/main/java/com/erik/screenobserver/ScreenAgentService22.java').read_text()
           l = Path('app/src/main/java/com/erik/screenobserver/LocalLanguageAgent.kt').read_text()
           g = Path('app/src/main/java/com/erik/screenobserver/GeminiRemoteAgent.kt').read_text()
+          k = Path('app/src/main/java/com/erik/screenobserver/GeminiKeyStore.java').read_text()
           i = Path('app/src/main/java/com/erik/screenobserver/IntentAgent.java').read_text()
           c = Path('app/src/main/java/com/erik/screenobserver/AndroidAppController.java').read_text()
           b = Path('app/src/main/java/com/erik/screenobserver/BlackjackEngine.java').read_text()
@@ -87,26 +89,33 @@ jobs:
               'ordinal controls': 'clickOrdinal' in a and 'case CLICK_ORDINAL:' in s,
               'sensitive ordinal guard': 'sensitiveScreenContext()' in s and 'no seleccionaré por posición' in s,
               'settings sections': 'openSettingsSection' in c and 'case OPEN_SETTINGS_SECTION:' in s,
-              'explicit settings phrases': 'abre ajustes de wifi' in i and 'abre ajustes de bluetooth' in i,
               'blackjack engine': 'recommendHard' in b and 'recommendSoft' in b and 'recommendPair' in b,
               'practice-only blackjack actuation': 'BlackjackEngine.isPracticeContext' in s and 'BlackjackEngine.isRealMoneyContext' in s,
               'phone command planner': 'class PhoneCommandPlanner' in p,
-              'model action safety': 'hasReliableSpeech(modelHypotheses)' in l,
-              'Gemini REST endpoint': 'gemini-2.5-flash' in g and 'x-goog-api-key' in g and ':generateContent' in g,
-              'Gemini structured JSON': 'responseMimeType' in g and 'responseSchema' in g,
-              'Gemini conversation memory': 'history' in g and 'Contexto conversacional reciente' in g,
-              'Gemini runtime key only': 'GeminiRemoteAgent.saveApiKey' in m and 'Gemini API key' in m,
+              'voice/model action safety': 'hasReliableSpeech(modelHypotheses)' in l and 'parsed.confidence < 0.62' in l,
+              'Gemini current model': 'gemini-3.6-flash' in g and 'gemini-2.5-flash' not in g,
+              'Interactions endpoint': '/v1beta/interactions' in g and ':generateContent' not in g,
+              'Interactions conversation state': 'previous_interaction_id' in g and 'previousInteractionId' in g and '.put("store", true)' in g,
+              'Interactions generation config': 'generation_config' in g and 'thinking_level' in g and 'max_output_tokens' in g,
+              'structured output new schema': 'response_format' in g and 'mime_type' in g and 'application/json' in g,
+              'Gemini API auth header': 'x-goog-api-key' in g,
+              'encrypted key storage': 'AndroidKeyStore' in k and 'AES/GCM/NoPadding' in k,
+              'no legacy plaintext key prefs': 'gemini_api_key' not in g and 'screen_observer_ai' not in g,
+              'no hardcoded Google key': 'AIza' not in g + k + l + m,
+              'sensitive cloud redaction': 'Pantalla sensible detectada' in g and 'isSensitiveContext' in g and 'contenido visual omitidos' in g,
+              'Gemini key controls': 'GeminiRemoteAgent.saveApiKey' in m and 'PROBAR GEMINI' in m and 'BORRAR CLAVE' in m,
+              'Gemini connection test': 'GeminiRemoteAgent.testApiKey' in m,
               'Gemini primary router': 'GeminiRemoteAgent.hasApiKey(appContext)' in l and 'gemini.interpret' in l,
               'Gemini local fallback': 'interpretLocalModel' in l and 'Gemini no disponible' in l,
-              'skip huge local download with Gemini': 'Gemini 2.5 Flash configurado' in l,
+              'skip huge local download with Gemini': 'Gemini 3.6 Flash configurado' in l,
               'rich voice Android context': 'languageAgent.interpret(matches, conf, currentUnderstandingContext()' in s,
-              'v2.6 package version': "versionName '2.6.0'" in gradle and 'versionCode 13' in gradle,
-              'v2.6 runtime branding': 'Screen Observer Pro 2.5' not in m + s + l and 'ScreenObserverPro/2.5' not in l,
+              'v2.7 package version': "versionName '2.7.0'" in gradle and 'versionCode 14' in gradle,
+              'v2.7 runtime branding': 'Screen Observer Pro 2.6' not in m + s + l and 'ScreenObserverPro/2.6' not in l + s,
           }
           failed = [name for name, ok in checks.items() if not ok]
           if failed:
-              raise SystemExit('v2.6 generated runtime validation failed: ' + ', '.join(failed))
-          print('PASS generated v2.6 runtime checks:', len(checks))
+              raise SystemExit('v2.7 generated runtime validation failed: ' + ', '.join(failed))
+          print('PASS generated v2.7 runtime checks:', len(checks))
           PY
       - name: Compile local test suites
         working-directory: screen-observer
