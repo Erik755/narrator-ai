@@ -1,0 +1,1 @@
+Gemini receives compact current app/package/OCR/accessibility context so it can resolve instructions like "toca el de arriba" without needing the user to restate the whole screen.
