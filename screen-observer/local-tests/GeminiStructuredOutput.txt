@@ -1,0 +1,1 @@
+Gemini responses are requested as application/json with responseJsonSchema: type, argument, reply, confidence.
