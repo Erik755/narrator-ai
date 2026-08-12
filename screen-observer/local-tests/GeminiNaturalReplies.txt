@@ -1,0 +1,1 @@
+For GENERAL conversation, Gemini's reply is spoken naturally. The assistant should not prepend "entendí" or echo the user's sentence.
