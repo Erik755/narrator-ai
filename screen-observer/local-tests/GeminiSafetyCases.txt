@@ -1,0 +1,6 @@
+Safety regressions for remote-model integration:
+- low-confidence speech must not directly actuate Android
+- destructive controls still require explicit confirmation
+- search must not write into unrelated fields
+- ordinal clicks remain blocked on sensitive screens
+- quoted or discussed commands should not be actuated merely because they contain action words
