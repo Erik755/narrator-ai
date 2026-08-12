@@ -1,0 +1,1 @@
+The Gemini key must only be entered at runtime and encrypted with Android Keystore. Never commit a real API key or embed one in BuildConfig/resources/source.
