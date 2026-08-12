@@ -1,0 +1,12 @@
+Screen Observer Pro 2.6 Gemini integration contract
+
+1. Gemini is primary only when a runtime API key exists.
+2. API key is never hardcoded or committed.
+3. API key storage uses Android Keystore AES/GCM.
+4. Primary model: gemini-3.6-flash.
+5. Remote fallback: gemini-3.5-flash-lite.
+6. Remote failures fall back to the local agent and deterministic parser.
+7. Gemini returns structured intent JSON; Android executes actions separately.
+8. Existing sensitive-action confirmation remains authoritative.
+9. Low-confidence speech cannot directly become an action.
+10. Typed commands remain available while microphone listening is paused.
