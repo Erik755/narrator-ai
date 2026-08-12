@@ -60,30 +60,35 @@ jobs:
           b = Path('app/src/main/java/com/erik/screenobserver/BlackjackEngine.java').read_text()
           p = Path('app/src/main/java/com/erik/screenobserver/PhoneCommandPlanner.java').read_text()
           mv = Path('app/src/main/java/com/erik/screenobserver/MainActivityV22.java').read_text()
-          g = Path('app/src/main/java/com/erik/screenobserver/GeminiAgent.java').read_text()
-          k = Path('app/src/main/java/com/erik/screenobserver/GeminiKeyStore.java').read_text()
+          g = Path('app/src/main/java/com/erik/screenobserver/GeminiRemoteAgent.java').read_text()
+          k = Path('app/src/main/java/com/erik/screenobserver/GeminiSecretStore.java').read_text()
           handler_start = s.find('private void handleTextCommand')
           handler_end = s.find('private String currentUnderstandingContext', handler_start)
           handler = s[handler_start:handler_end]
           checks = {
               'typed overlay input': 'EditText input = new EditText(this);' in a,
               'typed independent while mic paused': 'texto activo · micrófono pausado' in handler,
-              'Gemini primary runtime': 'geminiAgent.isConfigured()' in s and 'pensando con Gemini' in s,
-              'Gemini typed path': 'geminiAgent.interpret(typed, context, true' in handler,
-              'Gemini voice path': 'geminiAgent.interpret(matches.get(0)' in s,
-              'Gemini 2.5 Flash': 'gemini-2.5-flash' in g,
+              'Gemini preferred runtime': 'interpretWithPreferredAgent' in s and 'geminiAgent.isConfigured()' in s,
+              'Gemini typed/voice provider routing': s.count('interpretWithPreferredAgent(') >= 3,
+              'Gemini 3.6 Flash': 'gemini-3.6-flash' in g,
+              'Gemini Flash-Lite fallback': 'gemini-3.5-flash-lite' in g,
               'Gemini auth header': 'x-goog-api-key' in g,
-              'structured JSON response': 'responseMimeType' in g,
+              'structured JSON response': 'responseFormat' in g and 'mimeType' in g and 'schema' in g,
+              'low thinking level': 'thinkingLevel' in g and 'low' in g,
+              'screen context untrusted': 'NO CONFIABLES' in g and 'no instrucciones' in g.lower(),
               'encrypted key store': 'AndroidKeyStore' in k and 'AES/GCM/NoPadding' in k,
-              'key UI': 'GUARDAR CLAVE GEMINI' in mv and 'PROBAR CONEXIÓN GEMINI' in mv,
+              'key entry UI': 'GUARDAR CLAVE GEMINI' in mv and 'GeminiSecretStore.save' in mv,
               'no embedded key': 'AIza' not in g + k + mv + s,
-              'local fallback retained': 'languageAgent.interpret' in s and 'LocalLanguageAgent' in l,
+              'local fallback retained': 'languageAgent.interpret(candidates, confidences, richContext, activeSkill, callback);' in s and 'LocalLanguageAgent' in l,
+              'local model skipped when Gemini configured': 'if (!geminiAgent.isConfigured()) languageAgent.start();' in s,
               'multi-step commands retained': 'executeCommandPlan' in s,
               'safe search retained': 'case SEARCH:' in s and 'searchCurrentApp' in s,
               'settings controls retained': 'openSettingsSection' in c and 'case OPEN_SETTINGS_SECTION:' in s,
               'blackjack retained': 'recommendHard' in b and 'recommendSoft' in b and 'recommendPair' in b,
               'planner retained': 'class PhoneCommandPlanner' in p,
-              'voice confidence gate': 'hasReliableSpeechV26' in s,
+              'single Gemini implementation': not Path('app/src/main/java/com/erik/screenobserver/GeminiAgent.java').exists()
+                      and not Path('app/src/main/java/com/erik/screenobserver/GeminiKeyStore.java').exists(),
+              '2.6 activity branding': 'Screen Observer Pro 2.6' in mv,
               '2.6 package version': "versionName '2.6.0'" in Path('app/build.gradle').read_text(),
           }
           failed = [name for name, ok in checks.items() if not ok]
