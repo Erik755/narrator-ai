@@ -33,7 +33,7 @@ llm = replace_once(
             val preferred = if (supportsEnhancedModel()) ENHANCED_MODEL else STANDARD_MODEL''',
     '''            if (closed || ready) return@execute
             if (GeminiRemoteAgent.hasApiKey(appContext)) {
-                updateStatus("Gemini 2.5 Flash configurado")
+                updateStatus("Gemini 3.6 Flash configurado")
                 return@execute
             }
             val preferred = if (supportsEnhancedModel()) ENHANCED_MODEL else STANDARD_MODEL''',
@@ -92,7 +92,7 @@ gemini_gate = '''        // Explicit, high-confidence commands remain determinis
                         true,
                     )
                 }
-                updateStatus("Gemini 2.5 Flash listo")
+                updateStatus("Gemini 3.6 Flash listo")
                 callback.onResult(parsed)
             }
             return
@@ -177,7 +177,7 @@ llm = replace_once(
         try { engine?.close() } catch (_: Throwable) { }''',
     "gemini cleanup",
 )
-llm = llm.replace("ScreenObserverPro/2.5", "ScreenObserverPro/2.6")
+llm = llm.replace("ScreenObserverPro/2.5", "ScreenObserverPro/2.6.1")
 llm_path.write_text(llm, encoding="utf-8")
 
 # Voice gets app/package/OCR/accessibility context, not merely OCR text.
@@ -189,10 +189,11 @@ service = replace_once(
     '''                            languageAgent.interpret(matches, conf, currentUnderstandingContext(), activeSkillState,''',
     "rich voice context",
 )
-service = service.replace("Screen Observer Pro 2.5", "Screen Observer Pro 2.6")
+service = service.replace("Screen Observer Pro 2.5", "Screen Observer Pro 2.6.1")
 service_path.write_text(service, encoding="utf-8")
 
-# Main UI: API key is entered at runtime and stored only in app-private prefs.
+# Legacy MainActivity also receives the key field; the actual launcher is patched
+# separately in patch_v261_launcher_fix.py. Storage is Android-Keystore backed.
 main_path = Path("app/src/main/java/com/erik/screenobserver/MainActivity.java")
 main = main_path.read_text(encoding="utf-8")
 if "import android.text.InputType;" not in main:
@@ -209,8 +210,8 @@ main = replace_once(
 
         TextView geminiInfo = new TextView(this);
         geminiInfo.setText(GeminiRemoteAgent.hasApiKey(this)
-                ? "IA principal: Gemini 2.5 Flash · clave configurada"
-                : "IA principal opcional: Gemini 2.5 Flash. Pega tu API key para mejorar comprensión y conversación.");
+                ? "IA principal: Gemini 3.6 Flash · clave configurada"
+                : "IA principal opcional: Gemini 3.6 Flash. Pega tu API key para mejorar comprensión y conversación.");
         geminiInfo.setTextSize(13);
         geminiInfo.setPadding(0, 8, 0, 4);
         root.addView(geminiInfo);
@@ -232,7 +233,7 @@ main = replace_once(
             } else {
                 GeminiRemoteAgent.saveApiKey(this, key);
                 geminiKey.setText("");
-                geminiInfo.setText("Gemini 2.5 Flash configurado. Reinicia el asistente para usarlo como IA principal.");
+                geminiInfo.setText("Gemini 3.6 Flash configurado. Reinicia el asistente para usarlo como IA principal.");
             }
         });
         root.addView(saveGemini);
@@ -240,7 +241,7 @@ main = replace_once(
         accessibilityButton = new Button(this);''',
     "Gemini key UI",
 )
-main = main.replace("Screen Observer Pro 2.5", "Screen Observer Pro 2.6")
+main = main.replace("Screen Observer Pro 2.5", "Screen Observer Pro 2.6.1")
 main_path.write_text(main, encoding="utf-8")
 
-print("patch_v26_fixed: Gemini hybrid brain applied")
+print("patch_v26_fixed: Gemini 3.6 hybrid brain applied")
