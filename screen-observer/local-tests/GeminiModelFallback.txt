@@ -1,0 +1,1 @@
+If gemini-3.6-flash returns an API error, GeminiRemoteAgent retries gemini-3.5-flash-lite before yielding to the local provider.
