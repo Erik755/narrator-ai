@@ -1,0 +1,1 @@
+Endpoint family: https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent with x-goog-api-key authentication.
