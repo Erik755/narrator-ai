@@ -1,0 +1,1 @@
+GeminiRemoteAgent keeps a small in-memory rolling conversation summary so follow-up references can be interpreted without repeating the user's previous sentence back to them.
