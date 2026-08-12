@@ -1,0 +1,1 @@
+With a valid key, Gemini handles ambiguous/conversational language before the local model. Known deterministic Android commands may still be executed by the existing safe planner.
