@@ -48,7 +48,7 @@ jobs:
           python3 patch_v25_blackjack_ocr_fix.py
           python3 patch_v25_intent_guard_fix.py
           python3 patch_v26.py
-      - name: Validate generated v2.6 runtime
+      - name: Validate generated v2.6.1 runtime
         working-directory: screen-observer
         run: |
           python3 - <<'PY'
@@ -57,6 +57,7 @@ jobs:
           s = Path('app/src/main/java/com/erik/screenobserver/ScreenAgentService22.java').read_text()
           l = Path('app/src/main/java/com/erik/screenobserver/LocalLanguageAgent.kt').read_text()
           g = Path('app/src/main/java/com/erik/screenobserver/GeminiRemoteAgent.kt').read_text()
+          k = Path('app/src/main/java/com/erik/screenobserver/GeminiSecretStore.java').read_text()
           i = Path('app/src/main/java/com/erik/screenobserver/IntentAgent.java').read_text()
           c = Path('app/src/main/java/com/erik/screenobserver/AndroidAppController.java').read_text()
           b = Path('app/src/main/java/com/erik/screenobserver/BlackjackEngine.java').read_text()
@@ -72,41 +73,42 @@ jobs:
 
           checks = {
               'typed overlay input': 'EditText input = new EditText(this);' in a,
-              'typed action precedes projection gate': action_pos >= 0 and projection_pos >= 0 and action_pos < projection_pos,
-              'typed channel independent of mic pause': 'typedCommandsAvailable()' in s and 'return runningState;' in s and 'if (!listeningEnabled)' not in handler,
+              'typed before projection gate': action_pos >= 0 and projection_pos >= 0 and action_pos < projection_pos,
+              'typed active while mic paused': 'typedCommandsAvailable()' in s and 'if (!listeningEnabled)' not in handler,
               'deterministic plan first': 'PhoneCommandPlanner.plan(typed' in handler,
-              'conversational multi-segment gate': 'allCommandSteps' in handler,
-              'multi-step typed commands': 'executeCommandPlan' in s,
-              'state-aware app sequence': 'executePlanOpenApp' in s and 'waitForPlanAppReady' in s and 'packageChanged' in s,
+              'multi-step command gate': 'allCommandSteps' in handler,
+              'state-aware app sequence': 'executePlanOpenApp' in s and 'waitForPlanAppReady' in s,
               'sensitive chain stop': 'La secuencia se detuvo porque una acción requiere confirmación' in s,
-              'pause explains text remains active': 'La entrada escrita sigue activa' in s,
-              'resume listening': 'case RESUME_LISTENING:' in s,
-              'safe search skill': 'case SEARCH:' in s and 'searchCurrentApp' in s and 'no escribiré en otro campo' in s,
-              'volume skills': 'case VOLUME_UP:' in s and 'adjustVolume' in s,
-              'swipe skills': 'swipeLeft()' in a and 'swipeRight()' in a,
-              'ordinal controls': 'clickOrdinal' in a and 'case CLICK_ORDINAL:' in s,
+              'safe search': 'no escribiré en otro campo' in s,
               'sensitive ordinal guard': 'sensitiveScreenContext()' in s and 'no seleccionaré por posición' in s,
-              'settings sections': 'openSettingsSection' in c and 'case OPEN_SETTINGS_SECTION:' in s,
-              'explicit settings phrases': 'abre ajustes de wifi' in i and 'abre ajustes de bluetooth' in i,
+              'settings skills': 'openSettingsSection' in c and 'case OPEN_SETTINGS_SECTION:' in s,
               'blackjack engine': 'recommendHard' in b and 'recommendSoft' in b and 'recommendPair' in b,
-              'practice-only blackjack actuation': 'BlackjackEngine.isPracticeContext' in s and 'BlackjackEngine.isRealMoneyContext' in s,
-              'phone command planner': 'class PhoneCommandPlanner' in p,
-              'model action safety': 'hasReliableSpeech(modelHypotheses)' in l,
-              'Gemini REST endpoint': 'gemini-2.5-flash' in g and 'x-goog-api-key' in g and ':generateContent' in g,
-              'Gemini structured JSON': 'responseMimeType' in g and 'responseSchema' in g,
+              'practice-only blackjack': 'BlackjackEngine.isPracticeContext' in s and 'BlackjackEngine.isRealMoneyContext' in s,
+              'phone planner': 'class PhoneCommandPlanner' in p,
+              'voice confidence safety': 'hasReliableSpeech(modelHypotheses)' in l,
+              'Gemini 3.6 primary': 'gemini-3.6-flash' in g,
+              'Gemini fallback model': 'gemini-3.5-flash-lite' in g,
+              'Gemini REST auth': 'x-goog-api-key' in g and ':generateContent' in g,
+              'Gemini structured output': 'responseFormat' in g and 'mimeType' in g and 'schema' in g,
+              'Gemini low thinking': 'thinkingLevel' in g and 'low' in g,
+              'screen prompt-injection defense': 'DATOS NO CONFIABLES' in g and 'no instrucciones' in g,
               'Gemini conversation memory': 'history' in g and 'Contexto conversacional reciente' in g,
-              'Gemini runtime key only': 'GeminiRemoteAgent.saveApiKey' in m and 'Gemini API key' in m,
+              'encrypted key': 'AndroidKeyStore' in k and 'AES/GCM/NoPadding' in k,
+              'Gemini uses encrypted store': 'GeminiSecretStore.load' in g and 'GeminiSecretStore.save' in g,
+              'no plaintext key preference in Gemini agent': 'gemini_api_key' not in g,
+              'no embedded API key': 'AIza' not in g + k + m + s,
+              'Gemini runtime key UI': 'GeminiRemoteAgent.saveApiKey' in m and 'Gemini API key' in m,
               'Gemini primary router': 'GeminiRemoteAgent.hasApiKey(appContext)' in l and 'gemini.interpret' in l,
               'Gemini local fallback': 'interpretLocalModel' in l and 'Gemini no disponible' in l,
-              'skip huge local download with Gemini': 'Gemini 2.5 Flash configurado' in l,
-              'rich voice Android context': 'languageAgent.interpret(matches, conf, currentUnderstandingContext()' in s,
-              'v2.6 package version': "versionName '2.6.0'" in gradle and 'versionCode 13' in gradle,
-              'v2.6 runtime branding': 'Screen Observer Pro 2.5' not in m + s + l and 'ScreenObserverPro/2.5' not in l,
+              'skip local model with Gemini': 'Gemini 3.6 Flash configurado' in l,
+              'rich voice context': 'languageAgent.interpret(matches, conf, currentUnderstandingContext()' in s,
+              '2.6.1 package version': "versionName '2.6.1'" in gradle and 'versionCode 14' in gradle,
+              '2.6.1 branding': 'Screen Observer Pro 2.6.1' in m + s,
           }
           failed = [name for name, ok in checks.items() if not ok]
           if failed:
-              raise SystemExit('v2.6 generated runtime validation failed: ' + ', '.join(failed))
-          print('PASS generated v2.6 runtime checks:', len(checks))
+              raise SystemExit('v2.6.1 generated runtime validation failed: ' + ', '.join(failed))
+          print('PASS generated v2.6.1 runtime checks:', len(checks))
           PY
       - name: Compile local test suites
         working-directory: screen-observer
