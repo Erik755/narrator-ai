@@ -1,0 +1,1 @@
+CI must fail if a literal Gemini key prefix such as AIza is found in Gemini agent, key store, activity, or service source.
