@@ -48,6 +48,7 @@ jobs:
           python3 patch_v25_blackjack_ocr_fix.py
           python3 patch_v25_intent_guard_fix.py
           python3 patch_v26.py
+          python3 patch_v261_launcher_fix.py
       - name: Validate generated v2.6.1 runtime
         working-directory: screen-observer
         run: |
@@ -62,7 +63,8 @@ jobs:
           c = Path('app/src/main/java/com/erik/screenobserver/AndroidAppController.java').read_text()
           b = Path('app/src/main/java/com/erik/screenobserver/BlackjackEngine.java').read_text()
           p = Path('app/src/main/java/com/erik/screenobserver/PhoneCommandPlanner.java').read_text()
-          m = Path('app/src/main/java/com/erik/screenobserver/MainActivity.java').read_text()
+          launcher = Path('app/src/main/java/com/erik/screenobserver/MainActivityV22.java').read_text()
+          manifest = Path('app/src/main/AndroidManifest.xml').read_text()
           gradle = Path('app/build.gradle').read_text()
 
           action_pos = s.find('if (ACTION_TEXT_COMMAND.equals(action))')
@@ -72,6 +74,10 @@ jobs:
           handler = s[handler_start:handler_end]
 
           checks = {
+              'actual launcher is MainActivityV22': 'android:name=".MainActivityV22"' in manifest,
+              'Gemini key UI is on actual launcher': 'GUARDAR / CAMBIAR CLAVE GEMINI' in launcher and 'GeminiRemoteAgent.saveApiKey' in launcher,
+              'Gemini clear key control': 'BORRAR CLAVE GEMINI' in launcher and 'GeminiRemoteAgent.clearApiKey' in launcher,
+              'launcher branding': 'Screen Observer Pro 2.6.1' in launcher,
               'typed overlay input': 'EditText input = new EditText(this);' in a,
               'typed before projection gate': action_pos >= 0 and projection_pos >= 0 and action_pos < projection_pos,
               'typed active while mic paused': 'typedCommandsAvailable()' in s and 'if (!listeningEnabled)' not in handler,
@@ -96,14 +102,12 @@ jobs:
               'encrypted key': 'AndroidKeyStore' in k and 'AES/GCM/NoPadding' in k,
               'Gemini uses encrypted store': 'GeminiSecretStore.load' in g and 'GeminiSecretStore.save' in g,
               'no plaintext key preference in Gemini agent': 'gemini_api_key' not in g,
-              'no embedded API key': 'AIza' not in g + k + m + s,
-              'Gemini runtime key UI': 'GeminiRemoteAgent.saveApiKey' in m and 'Gemini API key' in m,
+              'no embedded API key': 'AIza' not in g + k + launcher + s,
               'Gemini primary router': 'GeminiRemoteAgent.hasApiKey(appContext)' in l and 'gemini.interpret' in l,
               'Gemini local fallback': 'interpretLocalModel' in l and 'Gemini no disponible' in l,
               'skip local model with Gemini': 'Gemini 3.6 Flash configurado' in l,
               'rich voice context': 'languageAgent.interpret(matches, conf, currentUnderstandingContext()' in s,
               '2.6.1 package version': "versionName '2.6.1'" in gradle and 'versionCode 14' in gradle,
-              '2.6.1 branding': 'Screen Observer Pro 2.6.1' in m + s,
           }
           failed = [name for name, ok in checks.items() if not ok]
           if failed:
