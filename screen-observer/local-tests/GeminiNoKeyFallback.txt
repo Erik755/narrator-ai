@@ -1,0 +1,1 @@
+If no Gemini key is configured, Screen Observer Pro keeps the existing deterministic Android parser and starts the local Qwen/LiteRT-LM agent as fallback.
