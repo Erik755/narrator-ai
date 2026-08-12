@@ -1,0 +1,1 @@
+When Gemini is enabled, the app sends the user's instruction and compact current-screen/accessibility text context to the Gemini Developer API. No API key is included in repository content.
