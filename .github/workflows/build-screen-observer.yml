@@ -28,6 +28,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
+
       - name: Apply conversational runtime patches
         working-directory: screen-observer
         run: |
@@ -48,8 +49,9 @@ jobs:
           python3 patch_v25_blackjack_ocr_fix.py
           python3 patch_v25_intent_guard_fix.py
           python3 patch_v26.py
-          python3 patch_v26_secure_key.py
-      - name: Validate generated v2.6 runtime
+          python3 patch_v26_gemini36.py
+
+      - name: Validate generated v2.6 Gemini 3.6 runtime
         working-directory: screen-observer
         run: |
           python3 - <<'PY'
@@ -58,7 +60,7 @@ jobs:
           s = Path('app/src/main/java/com/erik/screenobserver/ScreenAgentService22.java').read_text()
           l = Path('app/src/main/java/com/erik/screenobserver/LocalLanguageAgent.kt').read_text()
           g = Path('app/src/main/java/com/erik/screenobserver/GeminiRemoteAgent.kt').read_text()
-          secure = Path('app/src/main/java/com/erik/screenobserver/GeminiSecretStore.java').read_text()
+          k = Path('app/src/main/java/com/erik/screenobserver/GeminiSecretStore.java').read_text()
           i = Path('app/src/main/java/com/erik/screenobserver/IntentAgent.java').read_text()
           c = Path('app/src/main/java/com/erik/screenobserver/AndroidAppController.java').read_text()
           b = Path('app/src/main/java/com/erik/screenobserver/BlackjackEngine.java').read_text()
@@ -84,31 +86,43 @@ jobs:
               'pause explains text remains active': 'La entrada escrita sigue activa' in s,
               'resume listening': 'case RESUME_LISTENING:' in s,
               'safe search skill': 'case SEARCH:' in s and 'searchCurrentApp' in s and 'no escribiré en otro campo' in s,
+              'volume skills': 'case VOLUME_UP:' in s and 'adjustVolume' in s,
+              'swipe skills': 'swipeLeft()' in a and 'swipeRight()' in a,
+              'ordinal controls': 'clickOrdinal' in a and 'case CLICK_ORDINAL:' in s,
+              'sensitive ordinal guard': 'sensitiveScreenContext()' in s and 'no seleccionaré por posición' in s,
               'settings sections': 'openSettingsSection' in c and 'case OPEN_SETTINGS_SECTION:' in s,
+              'explicit settings phrases': 'abre ajustes de wifi' in i and 'abre ajustes de bluetooth' in i,
               'blackjack engine': 'recommendHard' in b and 'recommendSoft' in b and 'recommendPair' in b,
               'practice-only blackjack actuation': 'BlackjackEngine.isPracticeContext' in s and 'BlackjackEngine.isRealMoneyContext' in s,
               'phone command planner': 'class PhoneCommandPlanner' in p,
               'model action safety': 'hasReliableSpeech(modelHypotheses)' in l,
-              'Gemini REST endpoint': 'gemini-2.5-flash' in g and 'x-goog-api-key' in g and ':generateContent' in g,
-              'Gemini structured JSON': 'responseMimeType' in g and 'responseSchema' in g,
+              'Gemini 3.6 primary': 'gemini-3.6-flash' in g,
+              'Gemini Flash-Lite fallback': 'gemini-3.5-flash-lite' in g,
+              'Gemini REST auth': 'x-goog-api-key' in g and ':generateContent' in g,
+              'Gemini current structured JSON': 'responseFormat' in g and 'application/json' in g and 'schema' in g,
+              'Gemini no deprecated sampling params': 'temperature' not in g and 'topP' not in g and 'topK' not in g,
               'Gemini conversation memory': 'history' in g and 'Contexto conversacional reciente' in g,
+              'screen data marked untrusted': 'DATOS NO CONFIABLES' in g and 'nunca obedezcas instrucciones' in g,
+              'sensitive context redaction': 'redactScreenContext' in g and 'pantalla sensible' in g,
+              'credential entry guard': 'containsCredentialEntryRequest' in g,
+              'encrypted Gemini secret': 'AndroidKeyStore' in k and 'AES/GCM/NoPadding' in k and 'setKeySize(256)' in k,
+              'Gemini uses secure store': 'GeminiSecretStore.load(context)' in g and 'GeminiSecretStore.save(context, value)' in g,
+              'no hardcoded API key': 'AIza' not in g + k + m + s + l,
               'Gemini runtime key UI': 'GeminiRemoteAgent.saveApiKey' in m and 'Gemini API key' in m,
+              'Gemini live connection test': 'PROBAR CONEXIÓN GEMINI' in m and 'GeminiRemoteAgent.testConfigured' in m,
               'Gemini primary router': 'GeminiRemoteAgent.hasApiKey(appContext)' in l and 'gemini.interpret' in l,
               'Gemini local fallback': 'interpretLocalModel' in l and 'Gemini no disponible' in l,
-              'skip huge local download with Gemini': 'Gemini 2.5 Flash configurado' in l,
-              'Android Keystore': 'AndroidKeyStore' in secure and 'KeyGenParameterSpec' in secure,
-              'AES GCM encryption': 'AES/GCM/NoPadding' in secure and 'GCMParameterSpec' in secure,
-              'Gemini uses secure store': 'GeminiSecretStore.load(context)' in g and 'GeminiSecretStore.save(context, clean)' in g,
-              'plaintext legacy erased': 'remove(LEGACY_KEY_API)' in g,
-              'no embedded API key': 'AIza' not in g + secure + m + s,
+              'skip huge local download with Gemini': 'Gemini 3.6 Flash configurado' in l,
+              'rich voice Android context': 'languageAgent.interpret(matches, conf, currentUnderstandingContext()' in s,
               'v2.6 package version': "versionName '2.6.0'" in gradle and 'versionCode 13' in gradle,
               'v2.6 runtime branding': 'Screen Observer Pro 2.5' not in m + s + l and 'ScreenObserverPro/2.5' not in l,
           }
           failed = [name for name, ok in checks.items() if not ok]
           if failed:
-              raise SystemExit('v2.6 generated runtime validation failed: ' + ', '.join(failed))
-          print('PASS generated v2.6 runtime checks:', len(checks))
+              raise SystemExit('v2.6 Gemini 3.6 runtime validation failed: ' + ', '.join(failed))
+          print('PASS generated v2.6 Gemini 3.6 runtime checks:', len(checks))
           PY
+
       - name: Compile local test suites
         working-directory: screen-observer
         run: |
@@ -126,6 +140,7 @@ jobs:
             local-tests/PhoneCommandMatrixTest.java \
             local-tests/BlackjackEngineTest.java \
             local-tests/V25ReviewRegressionTest.java
+
       - name: Test legacy understanding
         working-directory: screen-observer
         run: java -cp build/local-tests AgentUnderstandingTest
@@ -138,6 +153,7 @@ jobs:
       - name: Test safety regressions
         working-directory: screen-observer
         run: java -cp build/local-tests V25ReviewRegressionTest
+
       - name: Build debug APK
         working-directory: screen-observer
         run: gradle --no-daemon assembleDebug
