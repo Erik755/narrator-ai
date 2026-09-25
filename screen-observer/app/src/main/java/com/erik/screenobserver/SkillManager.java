@@ -136,6 +136,18 @@ public class SkillManager {
         return join(out, "; ");
     }
 
+    public synchronized JSONArray getSkillSourcesArray(String name) {
+        if (name == null || name.trim().isEmpty()) return new JSONArray();
+        try {
+            JSONObject skill = readAll().optJSONObject(key(name));
+            if (skill == null) return new JSONArray();
+            JSONArray sources = skill.optJSONArray("sources");
+            return sources == null ? new JSONArray() : new JSONArray(sources.toString());
+        } catch (Exception e) {
+            return new JSONArray();
+        }
+    }
+
     public synchronized String listSkillNames() {
         JSONObject all = readAll();
         List<String> names = new ArrayList<>();

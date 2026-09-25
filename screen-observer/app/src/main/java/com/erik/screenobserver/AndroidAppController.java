@@ -27,6 +27,44 @@ public final class AndroidAppController {
         }
     }
 
+    public static boolean openSettingsSection(Context context, String section) {
+        String s = normalize(section);
+        String action;
+        if (s.contains("wifi") || s.contains("wi fi")) action = Settings.ACTION_WIFI_SETTINGS;
+        else if (s.contains("bluetooth")) action = Settings.ACTION_BLUETOOTH_SETTINGS;
+        else if (s.contains("sonido") || s.contains("audio") || s.contains("volumen")) action = Settings.ACTION_SOUND_SETTINGS;
+        else if (s.contains("pantalla") || s.contains("display")) action = Settings.ACTION_DISPLAY_SETTINGS;
+        else if (s.contains("bateria")) action = Settings.ACTION_BATTERY_SAVER_SETTINGS;
+        else if (s.contains("ubicacion") || s.contains("localizacion")) action = Settings.ACTION_LOCATION_SOURCE_SETTINGS;
+        else if (s.contains("aplicacion") || s.contains("apps")) action = Settings.ACTION_APPLICATION_SETTINGS;
+        else if (s.contains("notificacion")) action = Settings.ACTION_ALL_APPS_NOTIFICATION_SETTINGS;
+        else if (s.contains("seguridad")) action = Settings.ACTION_SECURITY_SETTINGS;
+        else if (s.contains("accesibilidad")) action = Settings.ACTION_ACCESSIBILITY_SETTINGS;
+        else action = Settings.ACTION_SETTINGS;
+        try {
+            Intent i = new Intent(action);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            context.startActivity(i);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    public static boolean openUrl(Context context, String value) {
+        if (context == null || value == null || value.trim().isEmpty()) return false;
+        String url = value.trim();
+        if (!url.matches("(?iu)^[a-z][a-z0-9+.-]*://.*")) url = "https://" + url;
+        try {
+            Intent i = new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url));
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            context.startActivity(i);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     /**
      * Finds a launcher app conservatively. A single shared vendor token is not enough for a
      * multi-word request, preventing e.g. an absent "Microsoft Teams" from opening Word.

@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    name: Web app (Vite build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+  android:
+    name: Screen Observer (tests + debug APK)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: screen-observer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Compile and run local unit tests
+        run: |
+          SRC=app/src/main/java/com/erik/screenobserver
+          mkdir -p build/local-tests
+          javac -d build/local-tests \
+            $SRC/TextNormalizer.java $SRC/BlackjackEngine.java $SRC/IntentAgent.java \
+            $SRC/PhoneCommandPlanner.java $SRC/AndroidSkillPack.java \
+            $SRC/CaptureGeometry.java $SRC/ConversationEngine.java \
+            local-tests/*.java
+          for t in AgentUnderstandingTest PhoneCommandMatrixTest BlackjackEngineTest V25ReviewRegressionTest; do
+            java -cp build/local-tests "$t"
+          done
+      - name: Assemble debug APK
+        run: gradle --no-daemon assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screen-observer-debug-apk
+          path: screen-observer/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

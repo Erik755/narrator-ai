@@ -3,6 +3,7 @@ package com.erik.screenobserver;
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.GestureDescription;
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Path;
 import android.graphics.drawable.GradientDrawable;
@@ -10,13 +11,17 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.InputType;
 import android.text.TextUtils;
 import android.view.Gravity;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
 import android.view.MotionEvent;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -33,6 +38,7 @@ public class AgentAccessibilityService extends AccessibilityService {
     private WindowManager windowManager;
     private LinearLayout overlayRoot;
     private TextView overlayText;
+    private EditText overlayInput;
     private WindowManager.LayoutParams overlayParams;
     private boolean overlayVisible = false;
 
@@ -138,6 +144,54 @@ public class AgentAccessibilityService extends AccessibilityService {
         }
     }
 
+    public boolean swipeLeft() { return swipeDirection(true); }
+    public boolean swipeRight() { return swipeDirection(false); }
+
+    private boolean swipeDirection(boolean left) {
+        try {
+            android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+            float y = dm.heightPixels * 0.52f;
+            float fromX = dm.widthPixels * (left ? 0.78f : 0.22f);
+            float toX = dm.widthPixels * (left ? 0.22f : 0.78f);
+            Path path = new Path();
+            path.moveTo(fromX, y);
+            path.lineTo(toX, y);
+            GestureDescription.StrokeDescription stroke =
+                    new GestureDescription.StrokeDescription(path, 0, 280);
+            return dispatchGesture(new GestureDescription.Builder().addStroke(stroke).build(), null, null);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    public boolean clickOrdinal(int oneBased, boolean fromEnd) {
+        if (oneBased < 1) return false;
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root == null) return false;
+        List<AccessibilityNodeInfo> nodes = new ArrayList<>();
+        try {
+            collectClickableNodes(root, nodes, 40);
+            if (nodes.isEmpty()) return false;
+            int index = fromEnd ? nodes.size() - oneBased : oneBased - 1;
+            if (index < 0 || index >= nodes.size()) return false;
+            return clickNodeOrParent(nodes.get(index));
+        } finally {
+            for (AccessibilityNodeInfo n : nodes) try { n.recycle(); } catch (Exception ignored) { }
+            root.recycle();
+        }
+    }
+
+    private void collectClickableNodes(AccessibilityNodeInfo node, List<AccessibilityNodeInfo> out, int limit) {
+        if (node == null || out.size() >= limit) return;
+        if (node.isEnabled() && node.isClickable()) out.add(AccessibilityNodeInfo.obtain(node));
+        for (int i = 0; i < node.getChildCount() && out.size() < limit; i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            if (child == null) continue;
+            collectClickableNodes(child, out, limit);
+            child.recycle();
+        }
+    }
+
     public boolean back() { return performGlobalAction(GLOBAL_ACTION_BACK); }
     public boolean home() { return performGlobalAction(GLOBAL_ACTION_HOME); }
     public boolean recents() { return performGlobalAction(GLOBAL_ACTION_RECENTS); }
@@ -230,19 +284,56 @@ public class AgentAccessibilityService extends AccessibilityService {
         header.addView(close, new LinearLayout.LayoutParams(dp(31), dp(28)));
         root.addView(header);
 
+        int screenWidth = getResources().getDisplayMetrics().widthPixels;
+        int overlayWidth = Math.max(dp(220), Math.min(dp(320), screenWidth - dp(16)));
+        int innerWidth = Math.max(dp(220), overlayWidth - dp(14));
+
         TextView body = new TextView(this);
         body.setText("🎙 Listo");
         body.setTextColor(Color.WHITE);
         body.setTextSize(11);
-        body.setMaxLines(3);
+        body.setMaxLines(4);
         body.setEllipsize(TextUtils.TruncateAt.END);
-        root.addView(body, new LinearLayout.LayoutParams(dp(168), WindowManager.LayoutParams.WRAP_CONTENT));
+        root.addView(body, new LinearLayout.LayoutParams(innerWidth, WindowManager.LayoutParams.WRAP_CONTENT));
+
+        EditText input = new EditText(this);
+        input.setHint("Escribe una instrucción…");
+        input.setTextColor(Color.WHITE);
+        input.setHintTextColor(0xFFBDBDBD);
+        input.setTextSize(13);
+        input.setMinLines(2);
+        input.setMaxLines(4);
+        input.setSingleLine(false);
+        input.setPadding(dp(8), dp(5), dp(8), dp(5));
+        input.setBackgroundColor(0xFF333333);
+        input.setRawInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        input.setImeOptions(EditorInfo.IME_ACTION_SEND);
+        input.setOnClickListener(v -> enterTypingMode(input));
+        input.setOnEditorActionListener((v, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_SEND) {
+                submitOverlayCommand();
+                return true;
+            }
+            return false;
+        });
+        root.addView(input, new LinearLayout.LayoutParams(innerWidth, WindowManager.LayoutParams.WRAP_CONTENT));
+
+        Button send = new Button(this);
+        send.setText("ENVIAR");
+        send.setTextSize(11);
+        send.setMinHeight(0);
+        send.setPadding(dp(4), 0, dp(4), 0);
+        send.setOnClickListener(v -> submitOverlayCommand());
+        root.addView(send, new LinearLayout.LayoutParams(innerWidth, dp(38)));
+        overlayInput = input;
 
         overlayParams = new WindowManager.LayoutParams(
-                dp(184),
+                overlayWidth,
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 android.graphics.PixelFormat.TRANSLUCENT);
         overlayParams.gravity = Gravity.TOP | Gravity.START;
         overlayParams.x = dp(8);
@@ -282,12 +373,65 @@ public class AgentAccessibilityService extends AccessibilityService {
         }
     }
 
+    private void enterTypingMode(EditText input) {
+        if (input == null || overlayRoot == null || overlayParams == null || windowManager == null) return;
+        try {
+            overlayParams.flags &= ~WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+            overlayParams.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                    | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS;
+            windowManager.updateViewLayout(overlayRoot, overlayParams);
+        } catch (Exception ignored) { }
+        input.requestFocus();
+        input.postDelayed(() -> {
+            InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null) imm.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT);
+        }, 80);
+    }
+
+    private void exitTypingMode() {
+        if (overlayInput != null) {
+            InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null) imm.hideSoftInputFromWindow(overlayInput.getWindowToken(), 0);
+            overlayInput.clearFocus();
+        }
+        if (overlayRoot != null && overlayParams != null && windowManager != null) {
+            try {
+                overlayParams.flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+                overlayParams.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS;
+                windowManager.updateViewLayout(overlayRoot, overlayParams);
+            } catch (Exception ignored) { }
+        }
+    }
+
+    private void submitOverlayCommand() {
+        if (overlayInput == null) return;
+        String command = overlayInput.getText() == null ? "" : overlayInput.getText().toString().trim();
+        if (command.isEmpty()) return;
+        if (!ScreenAgentService22.isRunning()) {
+            if (overlayText != null) overlayText.setText("Inicia primero el asistente.");
+            return;
+        }
+        Intent commandIntent = new Intent(this, ScreenAgentService22.class);
+        commandIntent.setAction("com.erik.screenobserver.v24.TEXT_COMMAND");
+        commandIntent.putExtra("textCommand", command);
+        try {
+            startService(commandIntent);
+            overlayInput.setText("");
+            if (overlayText != null) overlayText.setText("⌨ Procesando instrucción…");
+        } catch (Exception e) {
+            if (overlayText != null) overlayText.setText("No pude enviar la instrucción.");
+        }
+        exitTypingMode();
+    }
+
     private void removeOverlay() {
         if (overlayRoot != null && windowManager != null) {
             try { windowManager.removeView(overlayRoot); } catch (Exception ignored) { }
         }
         overlayRoot = null;
         overlayText = null;
+        overlayInput = null;
         overlayParams = null;
     }
 

@@ -14,8 +14,10 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
+import android.text.InputType;
 import android.view.Gravity;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -72,6 +74,36 @@ public class MainActivity extends Activity {
         info.setTextSize(15);
         info.setPadding(0, 18, 0, 16);
         root.addView(info);
+
+        TextView geminiInfo = new TextView(this);
+        geminiInfo.setText(GeminiRemoteAgent.hasApiKey(this)
+                ? "IA principal: Gemini 2.5 Flash · clave configurada"
+                : "IA principal opcional: Gemini 2.5 Flash. Pega tu API key para mejorar comprensión y conversación.");
+        geminiInfo.setTextSize(13);
+        geminiInfo.setPadding(0, 8, 0, 4);
+        root.addView(geminiInfo);
+
+        EditText geminiKey = new EditText(this);
+        geminiKey.setHint(GeminiRemoteAgent.hasApiKey(this)
+                ? "Clave guardada · pega otra para reemplazarla" : "Gemini API key");
+        geminiKey.setSingleLine(true);
+        geminiKey.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        root.addView(geminiKey);
+
+        Button saveGemini = new Button(this);
+        saveGemini.setText("GUARDAR / CAMBIAR CLAVE GEMINI");
+        saveGemini.setOnClickListener(v -> {
+            String key = geminiKey.getText() == null ? "" : geminiKey.getText().toString().trim();
+            if (key.isEmpty()) {
+                GeminiRemoteAgent.saveApiKey(this, "");
+                geminiInfo.setText("Clave Gemini eliminada. Se usará la IA local/respaldo.");
+            } else {
+                GeminiRemoteAgent.saveApiKey(this, key);
+                geminiKey.setText("");
+                geminiInfo.setText("Gemini 2.5 Flash configurado. Reinicia el asistente para usarlo como IA principal.");
+            }
+        });
+        root.addView(saveGemini);
 
         accessibilityButton = new Button(this);
         accessibilityButton.setOnClickListener(v -> openAccessibilityControl());

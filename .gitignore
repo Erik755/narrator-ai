@@ -5,3 +5,15 @@ dist/
 !.env.example
 .DS_Store
 .vercel/
+
+# Android / Gradle
+.gradle/
+build/
+local.properties
+*.apk
+*.aab
+*.jks
+*.keystore
+.idea/
+*.iml
+.kotlin/

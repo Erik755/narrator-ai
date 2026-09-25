@@ -8,11 +8,13 @@ import java.util.regex.Pattern;
 /** Pure-Java local intent interpreter. No API key or paid service required. */
 public final class IntentAgent {
     public enum Type {
-        HEARING_CHECK, HIDE_OVERLAY, SHOW_OVERLAY, STOP_ASSISTANT, PAUSE_LISTENING,
+        HEARING_CHECK, HIDE_OVERLAY, SHOW_OVERLAY, STOP_ASSISTANT, PAUSE_LISTENING, RESUME_LISTENING,
         LEARN_SKILL, LIST_SKILLS, USE_SKILL, SKILL_INFO, DESCRIBE_CONTROLS,
-        CONFIRM_CLICK, CLICK, LONG_CLICK, TYPE_TEXT, SCROLL_DOWN, SCROLL_UP,
+        CONFIRM_CLICK, CLICK, CLICK_ORDINAL, LONG_CLICK, TYPE_TEXT, SEARCH, SCROLL_DOWN, SCROLL_UP,
+        SWIPE_LEFT, SWIPE_RIGHT, VOLUME_UP, VOLUME_DOWN, VOLUME_MUTE, VOLUME_UNMUTE,
         BACK, HOME, RECENTS, NOTIFICATIONS, QUICK_SETTINGS, POWER_MENU, LOCK_SCREEN,
-        SCREENSHOT, OPEN_SETTINGS, OPEN_APP,
+        SCREENSHOT, OPEN_SETTINGS, OPEN_SETTINGS_SECTION, OPEN_URL, OPEN_APP, CLOSE_APP, LEARN_CURRENT_APP,
+        BLACKJACK_ADVICE, BLACKJACK_PLAY,
         DESCRIBE_SCREEN, READ_SCREEN, ADVICE, GENERAL
     }
 
@@ -50,6 +52,12 @@ public final class IntentAgent {
             "(?iu)(?:confirma(?:\\s+que)?\\s+)(?:pulsa|toca|presiona|oprime|selecciona|elige|manten\\s+presionado|mantén\\s+presionado)?\\s*(.+)$");
     private static final Pattern OPEN_APP = Pattern.compile(
             "(?iu)^(?:abre|inicia|lanza|ejecuta)\\s+(?:la\\s+)?(?:app|aplicacion|aplicación)?\\s*(.+)$");
+    private static final Pattern SEARCH = Pattern.compile(
+            "(?iu)^(?:busca|buscar|encuentra|localiza)\\s+(.+)$");
+    private static final Pattern OPEN_URL = Pattern.compile(
+            "(?iu)^(?:abre|visita|ve a|navega a)\\s+((?:https?://|www\\.)[^\\s]+|[a-z0-9.-]+\\.(?:com|org|net|io|mx|es)(?:/[^\\s]*)?)$");
+    private static final Pattern CLOSE_APP = Pattern.compile(
+            "(?iu)^(?:cierra|cerrar|sal\\s+de|salte\\s+de)\\s+(?:la\\s+)?(?:app|aplicacion|aplicación)?\\s*(.+)$");
 
     private IntentAgent() { }
 
@@ -110,12 +118,21 @@ public final class IntentAgent {
             case SHOW_OVERLAY:
             case STOP_ASSISTANT:
             case PAUSE_LISTENING:
+            case RESUME_LISTENING:
             case CONFIRM_CLICK:
             case CLICK:
+            case CLICK_ORDINAL:
             case LONG_CLICK:
             case TYPE_TEXT:
+            case SEARCH:
             case SCROLL_DOWN:
             case SCROLL_UP:
+            case SWIPE_LEFT:
+            case SWIPE_RIGHT:
+            case VOLUME_UP:
+            case VOLUME_DOWN:
+            case VOLUME_MUTE:
+            case VOLUME_UNMUTE:
             case BACK:
             case HOME:
             case RECENTS:
@@ -125,7 +142,12 @@ public final class IntentAgent {
             case LOCK_SCREEN:
             case SCREENSHOT:
             case OPEN_SETTINGS:
+            case OPEN_SETTINGS_SECTION:
+            case OPEN_URL:
             case OPEN_APP:
+            case CLOSE_APP:
+            case LEARN_CURRENT_APP:
+            case BLACKJACK_PLAY:
                 return true;
             default:
                 return false;
@@ -146,6 +168,17 @@ public final class IntentAgent {
             return r(Type.STOP_ASSISTANT, "", raw, .96);
         if (has(n, "deja de escuchar", "no me escuches", "pausa la escucha", "pausa escucha", "desactiva el microfono", "apaga el microfono"))
             return r(Type.PAUSE_LISTENING, "", raw, .96);
+        if (startsCommand(n, "reanuda la escucha", "reanuda escucha", "vuelve a escuchar", "escuchame otra vez",
+                "activa el microfono", "enciende el microfono", "reactiva la escucha"))
+            return r(Type.RESUME_LISTENING, "", raw, .97);
+
+        if (has(n,
+                "analiza este juego", "analiza el juego", "analiza un juego", "analiza el juego actual", "analiza este juego y aprende",
+                "aprende a usar este juego", "aprende a usar el juego", "aprende este juego", "estudia este juego",
+                "observa este juego y aprende", "aprende como funciona este juego",
+                "analiza esta app y aprende", "analiza esta aplicacion y aprende",
+                "aprende a usar esta app", "aprende a usar esta aplicacion"))
+            return r(Type.LEARN_CURRENT_APP, "", raw, .97);
 
         Matcher m = LEARN.matcher(raw.trim());
         if (m.find()) return r(Type.LEARN_SKILL, cleanup(m.group(1)), raw, .93);
@@ -180,8 +213,55 @@ public final class IntentAgent {
             return r(Type.LOCK_SCREEN, "", raw, .97);
         if (has(n, "toma una captura", "haz una captura", "captura de pantalla", "screenshot"))
             return r(Type.SCREENSHOT, "", raw, .96);
-        if (has(n, "abre ajustes", "abre configuracion", "abre la configuracion", "ve a ajustes", "ve a configuracion"))
+        if (startsCommand(n, "abre ajustes de wifi", "abre configuracion de wifi", "ajustes de wifi", "configuracion de wifi", "abre wifi", "configura wifi", "redes wifi"))
+            return r(Type.OPEN_SETTINGS_SECTION, "wifi", raw, .96);
+        if (startsCommand(n, "abre ajustes de bluetooth", "abre configuracion de bluetooth", "ajustes de bluetooth", "configuracion de bluetooth", "abre bluetooth", "configura bluetooth"))
+            return r(Type.OPEN_SETTINGS_SECTION, "bluetooth", raw, .96);
+        if (startsCommand(n, "abre ajustes de sonido", "abre configuracion de sonido", "abre ajustes de audio", "ajustes de sonido", "configuracion de sonido", "ajustes de audio", "configuracion de audio"))
+            return r(Type.OPEN_SETTINGS_SECTION, "sonido", raw, .95);
+        if (startsCommand(n, "abre ajustes de pantalla", "abre configuracion de pantalla", "ajustes de pantalla", "configuracion de pantalla", "ajustes de display"))
+            return r(Type.OPEN_SETTINGS_SECTION, "pantalla", raw, .95);
+        if (startsCommand(n, "abre ajustes de bateria", "abre configuracion de bateria", "ajustes de bateria", "configuracion de bateria", "ahorro de bateria"))
+            return r(Type.OPEN_SETTINGS_SECTION, "bateria", raw, .95);
+        if (startsCommand(n, "abre ajustes de ubicacion", "abre configuracion de ubicacion", "ajustes de ubicacion", "configuracion de ubicacion", "ajustes de localizacion"))
+            return r(Type.OPEN_SETTINGS_SECTION, "ubicacion", raw, .95);
+        if (startsCommand(n, "abre ajustes de aplicaciones", "abre configuracion de aplicaciones", "ajustes de aplicaciones", "configuracion de aplicaciones", "lista de aplicaciones", "administrar aplicaciones"))
+            return r(Type.OPEN_SETTINGS_SECTION, "aplicaciones", raw, .95);
+        if (startsCommand(n, "abre ajustes de notificaciones", "abre configuracion de notificaciones", "ajustes de notificaciones", "configuracion de notificaciones"))
+            return r(Type.OPEN_SETTINGS_SECTION, "notificaciones", raw, .95);
+        if (startsCommand(n, "abre ajustes de seguridad", "abre configuracion de seguridad", "ajustes de seguridad", "configuracion de seguridad"))
+            return r(Type.OPEN_SETTINGS_SECTION, "seguridad", raw, .95);
+        if (startsCommand(n, "abre ajustes de accesibilidad", "abre configuracion de accesibilidad", "ajustes de accesibilidad", "configuracion de accesibilidad", "abre accesibilidad"))
+            return r(Type.OPEN_SETTINGS_SECTION, "accesibilidad", raw, .95);
+        if (startsCommand(n, "abre ajustes", "abre configuracion", "abre la configuracion", "ve a ajustes", "ve a configuracion"))
             return r(Type.OPEN_SETTINGS, "", raw, .96);
+
+        if (startsCommand(n, "sube el volumen", "aumenta el volumen", "mas volumen", "volumen arriba"))
+            return r(Type.VOLUME_UP, "", raw, .96);
+        if (startsCommand(n, "baja el volumen", "reduce el volumen", "menos volumen", "volumen abajo"))
+            return r(Type.VOLUME_DOWN, "", raw, .96);
+        if (startsCommand(n, "silencia el telefono", "silencia el celular", "ponlo en silencio", "quita el sonido", "mute"))
+            return r(Type.VOLUME_MUTE, "", raw, .96);
+        if (startsCommand(n, "activa el sonido", "quita el silencio", "devuelve el sonido", "unmute"))
+            return r(Type.VOLUME_UNMUTE, "", raw, .96);
+        if (startsCommand(n, "desliza a la izquierda", "desliza izquierda", "swipe left", "pasa a la izquierda"))
+            return r(Type.SWIPE_LEFT, "", raw, .95);
+        if (startsCommand(n, "desliza a la derecha", "desliza derecha", "swipe right", "pasa a la derecha"))
+            return r(Type.SWIPE_RIGHT, "", raw, .95);
+        if (startsCommand(n, "pulsa el primero", "toca el primero", "elige el primero", "pulsa la primera opcion"))
+            return r(Type.CLICK_ORDINAL, "1", raw, .94);
+        if (startsCommand(n, "pulsa el segundo", "toca el segundo", "elige el segundo", "pulsa la segunda opcion"))
+            return r(Type.CLICK_ORDINAL, "2", raw, .94);
+        if (startsCommand(n, "pulsa el tercero", "toca el tercero", "elige el tercero", "pulsa la tercera opcion"))
+            return r(Type.CLICK_ORDINAL, "3", raw, .94);
+        if (startsCommand(n, "pulsa el ultimo", "toca el ultimo", "elige el ultimo", "ultima opcion"))
+            return r(Type.CLICK_ORDINAL, "last", raw, .94);
+
+        m = SEARCH.matcher(raw.trim());
+        if (m.find()) return r(Type.SEARCH, cleanup(m.group(1)), raw, .92);
+
+        m = OPEN_URL.matcher(raw.trim());
+        if (m.find()) return r(Type.OPEN_URL, cleanup(m.group(1)), raw, .95);
 
         m = CONFIRM.matcher(raw.trim());
         if (m.find() && n.startsWith("confirma"))
@@ -207,8 +287,12 @@ public final class IntentAgent {
             return r(Type.SCROLL_UP, "", raw, .92);
         if (has(n, "ve atras", "vuelve atras", "regresa", "retrocede", "boton atras"))
             return r(Type.BACK, "", raw, .91);
-        if (has(n, "ve al inicio", "ve a inicio", "pantalla de inicio", "ve a home", "abre el inicio"))
-            return r(Type.HOME, "", raw, .91);
+        if (has(n, "ve al inicio", "ve a inicio", "pantalla de inicio", "ve a home", "abre el inicio",
+                "abre la pantalla principal", "ve a la pantalla principal", "vete a la pantalla principal",
+                "vuelve a la pantalla principal", "regresa a la pantalla principal",
+                "muestra la pantalla principal", "llevame a la pantalla principal",
+                "inicio del celular", "inicio del telefono", "sal al inicio"))
+            return r(Type.HOME, "", raw, .97);
         if (has(n, "abre recientes", "muestra recientes", "aplicaciones recientes", "abre las apps recientes"))
             return r(Type.RECENTS, "", raw, .91);
 
@@ -218,6 +302,14 @@ public final class IntentAgent {
                 "explicame la pantalla", "que aparece en pantalla"))
             return r(Type.DESCRIBE_SCREEN, "", raw, .94);
 
+        boolean blackjackContext = BlackjackEngine.isBlackjackContext(raw + " " + activeSkill + " " + screenText);
+        if (startsCommand(n, "juega blackjack", "juega black jack", "juega esta mano de blackjack",
+                "activa modo blackjack", "modo blackjack automatico", "juega esta mano") && blackjackContext)
+            return r(Type.BLACKJACK_PLAY, raw, raw, .96);
+        if (blackjackContext && (has(n, "que hago", "que jugada", "pido o me planto", "que conviene",
+                "aconsejame", "recomiendame", "blackjack") || n.matches(".*\\b\\d{1,2}\\s+(?:contra|vs)\\s+(?:a|as|ace|[2-9]|10|j|q|k)\\b.*")))
+            return r(Type.BLACKJACK_ADVICE, raw, raw, .94);
+
         boolean gameContext = normalize(activeSkill).contains("ajedrez")
                 || normalize(screenText).contains("chess")
                 || normalize(screenText).contains("ajedrez");
@@ -226,6 +318,9 @@ public final class IntentAgent {
                 || (gameContext && has(n, "que jugada", "cual jugada", "que movimiento", "cual movimiento", "como juego",
                         "que muevo", "cual muevo", "mi siguiente jugada", "mejor jugada", "mejor movimiento", "mi mejor movimiento")))
             return r(Type.ADVICE, "", raw, .90);
+
+        m = CLOSE_APP.matcher(raw.trim());
+        if (m.find()) return r(Type.CLOSE_APP, cleanupTarget(m.group(1)), raw, .96);
 
         m = OPEN_APP.matcher(raw.trim());
         if (m.find()) return r(Type.OPEN_APP, cleanup(m.group(1)), raw, .86);
@@ -253,6 +348,25 @@ public final class IntentAgent {
 
     private static boolean has(String normalized, String... options) {
         for (String option : options) if (normalized.contains(normalize(option))) return true;
+        return false;
+    }
+
+    private static boolean startsCommand(String normalized, String... options) {
+        String value = normalize(normalized);
+        for (String option : options) {
+            String q = normalize(option);
+            if (value.equals(q)) return true;
+            if (!value.startsWith(q + " ")) continue;
+            String rest = value.substring(q.length()).trim();
+            // A command phrase can be mentioned rather than requested: e.g.
+            // "desliza a la izquierda es una instruccion...". Keep those conversational.
+            if (rest.equals("es") || rest.startsWith("es ")
+                    || rest.equals("era") || rest.startsWith("era ")
+                    || rest.equals("fue") || rest.startsWith("fue ")
+                    || rest.equals("significa") || rest.startsWith("significa ")
+                    || rest.equals("quiere decir") || rest.startsWith("quiere decir ")) continue;
+            return true;
+        }
         return false;
     }
 

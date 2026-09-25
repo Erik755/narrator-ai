@@ -31,6 +31,11 @@ public final class AndroidSkillPack {
         put("activar", "Activar", "On", "Encender", "Enable");
         put("desactivar", "Desactivar", "Off", "Apagar", "Disable");
         put("atras", "Atrás", "Back", "Regresar", "Volver");
+        put("actualizar", "Actualizar", "Refresh", "Recargar", "Reload");
+        put("pedir", "Pedir", "Hit", "Carta", "Otra carta");
+        put("plantarse", "Plantarse", "Stand", "Me planto", "Quedarse");
+        put("doblar", "Doblar", "Double", "Double down", "Doble");
+        put("separar", "Separar", "Split", "Dividir");
     }
 
     private AndroidSkillPack() { }

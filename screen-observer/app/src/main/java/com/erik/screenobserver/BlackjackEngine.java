@@ -56,9 +56,9 @@ public final class BlackjackEngine {
             "(?iu)(?:tengo|mano|mi mano)?\\s*(a|as|ace|[2-9]|10|j|q|k)\\s*[,/+ -]+\\s*(a|as|ace|[2-9]|10|j|q|k)\\s*(?:contra|vs|versus|frente a)\\s*(a|as|ace|[2-9]|10|j|q|k)\\b");
     // OCR fallback is intentionally strict. Never cross another field label to invent a card.
     private static final Pattern DEALER = Pattern.compile(
-            "(?iu)(?:^|[\\r\\n|])\\s*(?:dealer|crupier|casa)\\s*[:=\\-]?\\s*(a|as|ace|[2-9]|10|j|q|k)\\b");
+            "(?iu)(?:dealer|crupier|casa)\\s*[:=\\-]?\\s*(a|as|ace|[2-9]|10|j|q|k)\\b");
     private static final Pattern PLAYER_TOTAL = Pattern.compile(
-            "(?iu)(?:^|[\\r\\n|])\\s*(?:tu mano|your hand|player|jugador|mano|total)\\s*[:=\\-]?\\s*(\\d{1,2})\\b");
+            "(?iu)(?:tu mano|your hand|player|jugador|mano|total)\\s*[:=\\-]?\\s*(\\d{1,2})\\b");
 
     private BlackjackEngine() { }
 
