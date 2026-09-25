@@ -50,13 +50,13 @@ public class MainActivityV22 extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         TextView title = new TextView(this);
-        title.setText("Screen Observer Pro 2.3");
+        title.setText("Screen Observer Pro 2.4");
         title.setTextSize(27);
         title.setTextColor(Color.BLACK);
         root.addView(title);
 
         TextView info = new TextView(this);
-        info.setText("IA local real para comprender lenguaje natural y mantener conversación. Incluye Android 15/16, Accesibilidad + OCR, habilidades y modo silencioso.");
+        info.setText("IA local para voz o texto. La mini ventana ahora permite escribir instrucciones, además de usar Android 15/16, Accesibilidad + OCR y habilidades.");
         info.setTextSize(15);
         info.setPadding(0, 16, 0, 14);
         root.addView(info);
@@ -102,7 +102,7 @@ public class MainActivityV22 extends Activity {
         root.addView(skillStatus);
 
         TextView capabilities = new TextView(this);
-        capabilities.setText("Habla de forma natural. Ejemplos: “abre WhatsApp”, “entra a los ajustes y luego busca accesibilidad”, “¿qué hago ahora?”, “continúa con eso”, “pulsa Aceptar”, “aprende ajedrez”.");
+        capabilities.setText("Habla o escribe en la mini ventana. Ejemplos: “abre la pantalla principal”, “cierra WhatsApp”, “analiza este juego para que aprendas a usarlo”, “¿qué hago ahora?”, “pulsa Aceptar”.");
         capabilities.setTextSize(13);
         capabilities.setPadding(0, 16, 0, 0);
         root.addView(capabilities);

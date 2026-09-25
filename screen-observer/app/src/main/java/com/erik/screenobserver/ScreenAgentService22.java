@@ -9,6 +9,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.pm.ServiceInfo;
 import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.PixelFormat;
@@ -43,13 +44,17 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
-/** Screen Observer Pro 2.2: local intent agent + built-in Android 15/16 operating skill. */
+/** Screen Observer Pro 2.6: local intent agent + built-in Android 15/16 operating skill. */
 public class ScreenAgentService22 extends Service {
     public static final String ACTION_SHOW_OVERLAY = "com.erik.screenobserver.v22.SHOW_OVERLAY";
     public static final String ACTION_HIDE_OVERLAY = "com.erik.screenobserver.v22.HIDE_OVERLAY";
     public static final String ACTION_TOGGLE_LISTENING = "com.erik.screenobserver.v22.TOGGLE_LISTENING";
     public static final String ACTION_DESCRIBE_CONTROLS = "com.erik.screenobserver.v22.DESCRIBE_CONTROLS";
+    public static final String ACTION_TEXT_COMMAND = "com.erik.screenobserver.v24.TEXT_COMMAND";
+    private static final String EXTRA_TEXT_COMMAND = "textCommand";
 
     private static final String CHANNEL = "screen_observer_v22";
     private static final int FOREGROUND_ID = 36;
@@ -58,9 +63,11 @@ public class ScreenAgentService22 extends Service {
     private static volatile boolean listeningState = false;
     private static volatile String voiceStatus = "detenido";
     private static volatile String activeSkillState = "";
+    private static volatile String aiStatusState = "IA local pendiente";
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final List<VisionTarget> visionTargets = new ArrayList<>();
+    private final ExecutorService actionExecutor = Executors.newSingleThreadExecutor();
 
     private MediaProjection projection;
     private VirtualDisplay virtualDisplay;
@@ -71,6 +78,7 @@ public class ScreenAgentService22 extends Service {
     private TextToSpeech tts;
     private BargeInDetector barge;
     private SkillManager skills;
+    private LocalLanguageAgent languageAgent;
 
     private boolean listeningEnabled = true;
     private boolean listening = false;
@@ -80,11 +88,22 @@ public class ScreenAgentService22 extends Service {
     private boolean bargeInterrupted = false;
     private boolean autoLearning = false;
     private boolean visionMappingSafe = true;
+    private boolean cuePending = true;
+    private boolean pendingSensitiveLong = false;
     private int speechErrors = 0;
 
     private long ignoreUntil = 0;
     private long lastProcess = 0;
+    private long captureGeneration = 1;
+    private String activeUtteranceId = "";
     private String lastText = "";
+    private String lastContentPackage = "";
+    private String learningPackage = "";
+    private String learningSkillName = "";
+    private String lastLearningSnapshot = "";
+    private long learningUntil = 0;
+    private long lastLearningObservationAt = 0;
+    private int learningObservationCount = 0;
     private String pendingSensitive = "";
     private long pendingSensitiveUntil = 0;
     private int captureW = 1, captureH = 1;
@@ -103,9 +122,25 @@ public class ScreenAgentService22 extends Service {
         listeningState = true;
         voiceStatus = "preparando micrófono";
         createChannel();
-        startForeground(FOREGROUND_ID, notification());
+        if (Build.VERSION.SDK_INT >= 29) {
+            int type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION;
+            if (Build.VERSION.SDK_INT >= 30) type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
+            startForeground(FOREGROUND_ID, notification(), type);
+        } else {
+            startForeground(FOREGROUND_ID, notification());
+        }
         skills = new SkillManager(this);
         activeSkillState = skills.getActiveSkillName();
+        languageAgent = new LocalLanguageAgent(this, new LocalLanguageAgent.StatusListener() {
+            @Override public void onStatus(String value) {
+                main.post(() -> {
+                    aiStatusState = value == null ? "" : value;
+                    if (!speaking && !listening) voiceStatus = aiStatusState;
+                    passiveOverlay();
+                });
+            }
+        });
+        languageAgent.start();
         ocr = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
         barge = new BargeInDetector(this);
         setupTts();
@@ -136,6 +171,10 @@ public class ScreenAgentService22 extends Service {
             describeControls(true);
             return START_NOT_STICKY;
         }
+        if (ACTION_TEXT_COMMAND.equals(action)) {
+            handleTextCommand(intent.getStringExtra(EXTRA_TEXT_COMMAND));
+            return START_NOT_STICKY;
+        }
         if (projection != null) return START_NOT_STICKY;
 
         int result = intent.getIntExtra("resultCode", Activity.RESULT_CANCELED);
@@ -149,7 +188,17 @@ public class ScreenAgentService22 extends Service {
         }
 
         MediaProjectionManager manager = (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
+        if (manager == null) {
+            silent("No está disponible el servicio de captura.");
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         projection = manager.getMediaProjection(result, data);
+        if (projection == null) {
+            silent("La autorización de captura ya no es válida.");
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         projection.registerCallback(new MediaProjection.Callback() {
             @Override public void onStop() { stopSelf(); }
 
@@ -167,15 +216,18 @@ public class ScreenAgentService22 extends Service {
         visionMappingSafe = CaptureGeometry.isDirectScreenMappingSafe(contentW, contentH, screenW, screenH);
         createInitialCaptureSurface();
 
-        voiceStatus = "escuchando";
+        cuePending = true;
+        voiceStatus = "preparando escucha";
         passiveOverlay();
-        startListening(250);
+        startListening(120);
         refreshNotification();
         return START_NOT_STICKY;
     }
 
     @Override public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
+        captureGeneration++;
+        visionTargets.clear();
         updateScreenMetrics();
         visionMappingSafe = CaptureGeometry.isDirectScreenMappingSafe(contentW, contentH, screenW, screenH);
     }
@@ -209,6 +261,7 @@ public class ScreenAgentService22 extends Service {
     /** Keeps OCR geometry aligned after rotation or Android app-window sharing resize. */
     private void handleCapturedContentResize(int width, int height) {
         if (width <= 0 || height <= 0 || projection == null || virtualDisplay == null) return;
+        captureGeneration++;
         contentW = width;
         contentH = height;
         updateScreenMetrics();
@@ -246,6 +299,7 @@ public class ScreenAgentService22 extends Service {
             tts.setSpeechRate(1.05f);
             tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
                 @Override public void onStart(String id) {
+                    if (!activeUtteranceId.equals(id)) return;
                     ttsPendingStart = false;
                     speaking = true;
                     bargeInterrupted = false;
@@ -254,10 +308,14 @@ public class ScreenAgentService22 extends Service {
                     if (barge != null) barge.start(ScreenAgentService22.this::interruptSpeech);
                     passiveOverlay();
                 }
-                @Override public void onDone(String id) { finishSpeech(false); }
-                @Override public void onError(String id) { finishSpeech(false); }
+                @Override public void onDone(String id) {
+                    if (activeUtteranceId.equals(id)) finishSpeech(false);
+                }
+                @Override public void onError(String id) {
+                    if (activeUtteranceId.equals(id)) finishSpeech(false);
+                }
                 @Override public void onStop(String id, boolean interrupted) {
-                    finishSpeech(interrupted || bargeInterrupted);
+                    if (activeUtteranceId.equals(id)) finishSpeech(interrupted || bargeInterrupted);
                 }
             });
         });
@@ -266,12 +324,14 @@ public class ScreenAgentService22 extends Service {
     private void interruptSpeech() {
         if (!speaking) return;
         bargeInterrupted = true;
+        activeUtteranceId = "";
         if (barge != null) barge.stop();
         try { if (tts != null) tts.stop(); } catch (Exception ignored) { }
         speaking = false;
         ttsPendingStart = false;
         ignoreUntil = SystemClock.elapsedRealtime() + 50;
-        voiceStatus = "interrumpido · escuchando";
+        cuePending = true;
+        voiceStatus = "preparando escucha";
         passiveOverlay();
         startListening(70);
     }
@@ -279,11 +339,13 @@ public class ScreenAgentService22 extends Service {
     private void finishSpeech(boolean interrupted) {
         main.post(() -> {
             if (barge != null) barge.stop();
+            activeUtteranceId = "";
             speaking = false;
             ttsPendingStart = false;
-            long delay = interrupted ? 80 : 550;
+            long delay = interrupted ? 80 : 260;
             ignoreUntil = SystemClock.elapsedRealtime() + delay;
-            voiceStatus = listeningEnabled ? "escuchando" : "escucha pausada";
+            cuePending = listeningEnabled;
+            voiceStatus = listeningEnabled ? "preparando escucha" : "escucha pausada";
             passiveOverlay();
             startListening(delay);
         });
@@ -322,18 +384,22 @@ public class ScreenAgentService22 extends Service {
                     speechErrors = 0;
                     listening = true;
                     listeningState = true;
-                    voiceStatus = "escuchando";
+                    voiceStatus = "🟢 listo · habla ahora";
                     passiveOverlay();
+                    if (cuePending) {
+                        cuePending = false;
+                        ReadyCue.signal();
+                    }
                 }
                 @Override public void onBeginningOfSpeech() {
-                    voiceStatus = "te estoy oyendo";
+                    voiceStatus = "escuchando tu petición";
                     passiveOverlay();
                 }
                 @Override public void onRmsChanged(float v) { }
                 @Override public void onBufferReceived(byte[] b) { }
                 @Override public void onEndOfSpeech() {
                     listening = false;
-                    voiceStatus = "entendiendo";
+                    voiceStatus = "procesando";
                     passiveOverlay();
                 }
                 @Override public void onError(int e) {
@@ -347,10 +413,12 @@ public class ScreenAgentService22 extends Service {
                         return;
                     }
                     if (e == SpeechRecognizer.ERROR_NO_MATCH || e == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
-                        voiceStatus = "escuchando";
-                        startListening(220);
+                        cuePending = true;
+                        voiceStatus = "preparando escucha";
+                        startListening(160);
                         return;
                     }
+                    cuePending = true;
                     voiceStatus = "reintentando escucha";
                     if (e == SpeechRecognizer.ERROR_RECOGNIZER_BUSY
                             || e == SpeechRecognizer.ERROR_CLIENT
@@ -370,24 +438,52 @@ public class ScreenAgentService22 extends Service {
                 @Override public void onResults(Bundle b) {
                     listening = false;
                     speechErrors = 0;
-                    ArrayList<String> matches = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-                    float[] conf = b.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES);
+                    final ArrayList<String> matches = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                    final float[] conf = b.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES);
                     if (matches != null && !matches.isEmpty()) {
-                        IntentAgent.Result u = IntentAgent.interpret(matches, conf, activeSkillState, lastText);
-                        voiceStatus = "entendí: " + u.type.name().toLowerCase(Locale.ROOT);
+                        voiceStatus = languageAgent != null && languageAgent.isReady()
+                                ? "pensando con IA" : "procesando";
                         passiveOverlay();
-                        dispatch(u);
-                    } else {
-                        voiceStatus = "escuchando";
+                        if (languageAgent != null) {
+                            languageAgent.interpret(matches, conf, currentUnderstandingContext(), activeSkillState,
+                                    new LocalLanguageAgent.Callback() {
+                                @Override public void onResult(LocalLanguageAgent.Result ai) {
+                                    main.post(() -> {
+                                        if (!runningState) return;
+                                        IntentAgent.Result u = new IntentAgent.Result(
+                                                ai.getType(), ai.getArgument(), matches.get(0), ai.getConfidence());
+                                        if (ai.getUsedModel()
+                                                && u.type == IntentAgent.Type.GENERAL
+                                                && ai.getReply() != null
+                                                && !ai.getReply().trim().isEmpty()) {
+                                            speak(ai.getReply());
+                                        } else {
+                                            dispatch(u);
+                                        }
+                                        if (!speaking && !ttsPendingStart && listeningEnabled) {
+                                            cuePending = true;
+                                            voiceStatus = "preparando escucha";
+                                            passiveOverlay();
+                                            startListening(100);
+                                        }
+                                    });
+                                }
+                            });
+                            return;
+                        }
+                        dispatch(IntentAgent.interpret(matches, conf, activeSkillState, lastText));
                     }
-                    if (!speaking && !ttsPendingStart) startListening(250);
+                    if (!speaking && !ttsPendingStart && listeningEnabled) {
+                        cuePending = true;
+                        voiceStatus = "preparando escucha";
+                        passiveOverlay();
+                        startListening(100);
+                    }
                 }
                 @Override public void onPartialResults(Bundle b) {
-                    ArrayList<String> p = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-                    if (p != null && !p.isEmpty()) {
-                        voiceStatus = "oyendo: " + compact(p.get(0), 36);
-                        passiveOverlay();
-                    }
+                    // Do not expose or repeat an unstable partial transcript.
+                    voiceStatus = "escuchando tu petición";
+                    passiveOverlay();
                 }
                 @Override public void onEvent(int t, Bundle b) { }
             });
@@ -449,10 +545,182 @@ public class ScreenAgentService22 extends Service {
             voiceStatus = "escucha pausada";
         } else {
             if (recognizer == null) createRecognizer();
-            voiceStatus = "escuchando";
-            startListening(150);
+            cuePending = true;
+            voiceStatus = "preparando escucha";
+            startListening(100);
         }
         passiveOverlay();
+    }
+
+    private boolean typedCommandsAvailable() {
+        return runningState;
+    }
+
+    private void handleTextCommand(String command) {
+        if (!typedCommandsAvailable()) return;
+        final String typed = command == null ? "" : command.trim();
+        if (typed.isEmpty()) {
+            silent("Escribe una instrucción antes de enviarla.");
+            return;
+        }
+
+        // Text is an independent control channel. Pausing microphone listening must never
+        // disable typed commands. We only cancel an in-flight recognizer if one is active.
+        if (listening) cancelListening();
+        voiceStatus = listeningEnabled ? "⌨ procesando texto" : "⌨ texto activo · micrófono pausado";
+        passiveOverlay();
+
+        final String context = currentUnderstandingContext();
+        final List<IntentAgent.Result> plan = PhoneCommandPlanner.plan(typed, activeSkillState, context);
+        boolean allCommandSteps = plan.size() > 1;
+        if (allCommandSteps) {
+            for (IntentAgent.Result step : plan) {
+                if (step == null || step.type == IntentAgent.Type.GENERAL) {
+                    allCommandSteps = false;
+                    break;
+                }
+            }
+        }
+        if (allCommandSteps) {
+            if (PhoneCommandPlanner.containsSensitive(typed)) {
+                speak("Por seguridad, envía las acciones sensibles una por una para que pueda confirmarlas.");
+                finishTypedCommand();
+                return;
+            }
+            executeCommandPlan(plan, 0);
+            return;
+        }
+        if (plan.size() == 1 && plan.get(0).type != IntentAgent.Type.GENERAL
+                && plan.get(0).confidence >= 0.50) {
+            dispatch(plan.get(0));
+            finishTypedCommand();
+            return;
+        }
+
+        final ArrayList<String> input = new ArrayList<>();
+        input.add(typed);
+        final float[] confidence = new float[]{1.0f};
+        if (languageAgent != null) {
+            languageAgent.interpret(input, confidence, context, activeSkillState,
+                    new LocalLanguageAgent.Callback() {
+                @Override public void onResult(LocalLanguageAgent.Result ai) {
+                    main.post(() -> {
+                        if (!runningState) return;
+                        IntentAgent.Result result = new IntentAgent.Result(
+                                ai.getType(), ai.getArgument(), typed, ai.getConfidence());
+                        if (ai.getUsedModel()
+                                && result.type == IntentAgent.Type.GENERAL
+                                && ai.getReply() != null
+                                && !ai.getReply().trim().isEmpty()) {
+                            speak(ai.getReply());
+                        } else {
+                            dispatch(result);
+                        }
+                        finishTypedCommand();
+                    });
+                }
+            });
+            return;
+        }
+        dispatch(plan.isEmpty()
+                ? IntentAgent.interpret(input, confidence, activeSkillState, context)
+                : plan.get(0));
+        finishTypedCommand();
+    }
+
+    private String currentUnderstandingContext() {
+        AgentAccessibilityService access = AgentAccessibilityService.getInstance();
+        String controls = access == null ? "" : access.listInteractiveElements();
+        String pkg = currentContentPackage();
+        String label = appLabel(pkg);
+        return "App: " + compact(label, 80)
+                + " | Paquete: " + compact(pkg, 100)
+                + " | Pantalla OCR: " + compact(lastText, 1500)
+                + " | " + compact(controls, 1000);
+    }
+
+    private void finishTypedCommand() {
+        if (speaking || ttsPendingStart) return;
+        if (listeningEnabled) {
+            cuePending = true;
+            voiceStatus = "preparando escucha";
+            passiveOverlay();
+            startListening(120);
+        } else {
+            listeningState = false;
+            voiceStatus = "escucha pausada · texto activo";
+            passiveOverlay();
+        }
+    }
+
+    private void executeCommandPlan(List<IntentAgent.Result> plan, int index) {
+        if (plan == null || index >= plan.size()) {
+            finishTypedCommand();
+            return;
+        }
+        IntentAgent.Result step = plan.get(index);
+        if (step == null || step.type == IntentAgent.Type.GENERAL) {
+            speak("Entendí parte de la secuencia, pero una acción quedó ambigua. Escríbela por separado.");
+            finishTypedCommand();
+            return;
+        }
+        if (step.type == IntentAgent.Type.OPEN_APP) {
+            executePlanOpenApp(plan, index, step);
+            return;
+        }
+        dispatch(step);
+        if (!runningState || step.type == IntentAgent.Type.STOP_ASSISTANT) return;
+        if (!pendingSensitive.isEmpty() && SystemClock.elapsedRealtime() < pendingSensitiveUntil) {
+            speak("La secuencia se detuvo porque una acción requiere confirmación.");
+            finishTypedCommand();
+            return;
+        }
+        long delay = PhoneCommandPlanner.recommendedDelayMs(step.type);
+        main.postDelayed(() -> executeCommandPlan(plan, index + 1), delay);
+    }
+
+    private void executePlanOpenApp(List<IntentAgent.Result> plan, int index, IntentAgent.Result step) {
+        final AgentAccessibilityService access = AgentAccessibilityService.getInstance();
+        final String requested = step.argument == null ? "" : step.argument.trim();
+        final String beforePackage = currentContentPackage();
+        if (access == null || requested.isEmpty()) {
+            speak("No puedo abrir esa aplicación de forma fiable sin Control de pantalla activo.");
+            finishTypedCommand();
+            return;
+        }
+        actionExecutor.execute(() -> {
+            final boolean opened = AndroidAppController.launchAppByLabel(access, requested);
+            main.post(() -> {
+                if (!opened) {
+                    speak("No encontré la aplicación " + requested + ". La secuencia se detuvo.");
+                    finishTypedCommand();
+                    return;
+                }
+                waitForPlanAppReady(plan, index, requested, beforePackage, 0);
+            });
+        });
+    }
+
+    private void waitForPlanAppReady(List<IntentAgent.Result> plan, int index, String requested,
+                                     String beforePackage, int attempt) {
+        if (!runningState) return;
+        String current = currentContentPackage();
+        String currentLabel = IntentAgent.normalize(appLabel(current));
+        String wanted = IntentAgent.normalize(requested);
+        boolean labelMatches = !currentLabel.isEmpty() && !wanted.isEmpty()
+                && (currentLabel.contains(wanted) || wanted.contains(currentLabel));
+        boolean packageChanged = current != null && !current.isEmpty()
+                && beforePackage != null && !current.equals(beforePackage);
+        if (labelMatches || packageChanged) {
+            main.postDelayed(() -> executeCommandPlan(plan, index + 1), 180);
+            return;
+        }
+        if (attempt >= 16) {
+            speak("Abrí la aplicación, pero no pude confirmar que estuviera lista. Detuve la secuencia para no actuar en la pantalla equivocada.");
+            finishTypedCommand();
+            return;
+        }
+        main.postDelayed(() -> waitForPlanAppReady(plan, index, requested, beforePackage, attempt + 1), 250);
     }
 
     private void dispatch(IntentAgent.Result r) {
@@ -460,7 +728,7 @@ public class ScreenAgentService22 extends Service {
         AgentAccessibilityService a;
         switch (r.type) {
             case HEARING_CHECK:
-                speak("Sí, te escucho y entendí la prueba.");
+                speak("Sí. Te escucho.");
                 break;
             case HIDE_OVERLAY:
                 a = AgentAccessibilityService.getInstance();
@@ -480,10 +748,21 @@ public class ScreenAgentService22 extends Service {
                 listeningEnabled = false;
                 listeningState = false;
                 cancelListening();
-                silent("Escucha pausada.");
+                silent("Escucha pausada. La entrada escrita sigue activa.");
+                break;
+            case RESUME_LISTENING:
+                listeningEnabled = true;
+                listeningState = true;
+                if (recognizer == null) createRecognizer();
+                voiceStatus = "preparando escucha";
+                startListening(120);
+                silent("Escucha reanudada.");
                 break;
             case LEARN_SKILL:
                 learn(r.argument);
+                break;
+            case LEARN_CURRENT_APP:
+                learnCurrentApp();
                 break;
             case LIST_SKILLS: {
                 String s = skills.listSkillNames();
@@ -512,18 +791,53 @@ public class ScreenAgentService22 extends Service {
             case CLICK:
                 click(r.argument, false);
                 break;
+            case CLICK_ORDINAL: {
+                if (sensitiveScreenContext()) {
+                    speak("Por seguridad, en esta pantalla usa el nombre exacto del botón y confirma la acción; no seleccionaré por posición.");
+                    break;
+                }
+                AgentAccessibilityService ord = AgentAccessibilityService.getInstance();
+                boolean last = "last".equalsIgnoreCase(r.argument);
+                int ordinal = last ? 1 : parsePositiveInt(r.argument, 1);
+                silent(ord != null && ord.clickOrdinal(ordinal, last)
+                        ? "Control seleccionado." : "No pude seleccionar ese control por posición.");
+                break;
+            }
             case LONG_CLICK:
-                longClick(r.argument);
+                longClick(r.argument, false);
                 break;
             case TYPE_TEXT:
                 a = AgentAccessibilityService.getInstance();
                 silent(a != null && a.setFocusedText(r.argument) ? "Texto introducido." : "No encuentro un campo editable enfocado.");
+                break;
+            case SEARCH:
+                searchCurrentApp(r.argument);
                 break;
             case SCROLL_DOWN:
                 scroll(true);
                 break;
             case SCROLL_UP:
                 scroll(false);
+                break;
+            case SWIPE_LEFT:
+                a = AgentAccessibilityService.getInstance();
+                silent(a != null && a.swipeLeft() ? "Deslicé a la izquierda." : "No pude hacer ese gesto.");
+                break;
+            case SWIPE_RIGHT:
+                a = AgentAccessibilityService.getInstance();
+                silent(a != null && a.swipeRight() ? "Deslicé a la derecha." : "No pude hacer ese gesto.");
+                break;
+            case VOLUME_UP:
+                adjustVolume(android.media.AudioManager.ADJUST_RAISE);
+                break;
+            case VOLUME_DOWN:
+                adjustVolume(android.media.AudioManager.ADJUST_LOWER);
+                break;
+            case VOLUME_MUTE:
+                adjustVolume(android.media.AudioManager.ADJUST_MUTE);
+                break;
+            case VOLUME_UNMUTE:
+                adjustVolume(android.media.AudioManager.ADJUST_UNMUTE);
                 break;
             case BACK:
                 a = AgentAccessibilityService.getInstance();
@@ -557,13 +871,39 @@ public class ScreenAgentService22 extends Service {
                 a = AgentAccessibilityService.getInstance();
                 silent(a != null && a.screenshot() ? "Captura solicitada." : "No pude tomar la captura.");
                 break;
+            case CLOSE_APP:
+                closeRequestedApp(r.argument);
+                break;
             case OPEN_SETTINGS:
                 silent(AndroidAppController.openSettings(this) ? "Ajustes abiertos." : "No pude abrir Ajustes.");
                 break;
-            case OPEN_APP:
-                silent(AndroidAppController.launchAppByLabel(this, r.argument)
-                        ? "Abrí " + r.argument + "." : "No encontré una aplicación llamada " + r.argument + ".");
+            case OPEN_SETTINGS_SECTION:
+                silent(AndroidAppController.openSettingsSection(this, r.argument)
+                        ? "Abrí ajustes de " + r.argument + "." : "No pude abrir esa sección de Ajustes.");
                 break;
+            case OPEN_URL:
+                silent(AndroidAppController.openUrl(this, r.argument)
+                        ? "Abrí " + r.argument + "." : "No pude abrir esa dirección.");
+                break;
+            case BLACKJACK_ADVICE:
+                blackjackAdvice(r.raw);
+                break;
+            case BLACKJACK_PLAY:
+                blackjackPlay(r.raw);
+                break;
+            case OPEN_APP: {
+                final AgentAccessibilityService access = AgentAccessibilityService.getInstance();
+                final String requestedApp = r.argument == null ? "" : r.argument.trim();
+                if (access == null) {
+                    speak("Activa Control de pantalla para poder abrir otras aplicaciones de forma fiable.");
+                    break;
+                }
+                actionExecutor.execute(() -> {
+                    final boolean opened = AndroidAppController.launchAppByLabel(access, requestedApp);
+                    main.post(() -> silent(opened ? "Aplicación abierta." : "No encontré esa aplicación."));
+                });
+                break;
+            }
             case DESCRIBE_SCREEN:
                 speak(lastText.isEmpty() ? "No detecto texto legible en este momento." : "Veo en pantalla: " + compact(lastText, 430));
                 break;
@@ -576,12 +916,260 @@ public class ScreenAgentService22 extends Service {
             case GENERAL:
             default:
                 if (r.confidence < .48) {
-                    speak("Te oí decir: " + compact(r.raw, 80) + ". No entendí bien la intención. Dime qué quieres que haga con la pantalla.");
+                    speak("No alcancé a entender la intención. Inténtalo otra vez cuando oigas la señal.");
                 } else {
                     speak(generalAnswer(r.raw));
                 }
                 break;
         }
+    }
+
+    private boolean sensitiveScreenContext() {
+        String screen = IntentAgent.normalize(lastText);
+        return has(screen,
+                "desinstalar", "uninstall", "factory reset", "restablecer de fabrica",
+                "borrar todos los datos", "eliminar todos los datos", "erase all data",
+                "eliminar cuenta", "delete account", "remove account", "formatear",
+                "pagar", "comprar", "transferir", "enviar dinero", "depositar", "retirar");
+    }
+
+    private int parsePositiveInt(String value, int fallback) {
+        try {
+            int n = Integer.parseInt(value == null ? "" : value.trim());
+            return n > 0 ? n : fallback;
+        } catch (Exception e) {
+            return fallback;
+        }
+    }
+
+    private void adjustVolume(int direction) {
+        try {
+            android.media.AudioManager audio = (android.media.AudioManager) getSystemService(AUDIO_SERVICE);
+            if (audio == null) {
+                silent("No pude acceder al audio.");
+                return;
+            }
+            audio.adjustStreamVolume(android.media.AudioManager.STREAM_MUSIC, direction,
+                    android.media.AudioManager.FLAG_SHOW_UI);
+            silent("Volumen ajustado.");
+        } catch (Exception e) {
+            silent("No pude cambiar el volumen.");
+        }
+    }
+
+    private void searchCurrentApp(String query) {
+        if (query == null || query.trim().isEmpty()) {
+            speak("Dime qué quieres buscar.");
+            return;
+        }
+        AgentAccessibilityService access = AgentAccessibilityService.getInstance();
+        if (access == null) {
+            speak("Necesito Control de pantalla activo para buscar dentro de la aplicación.");
+            return;
+        }
+        boolean opened = false;
+        for (String alias : AndroidSkillPack.aliasesForTarget("buscar")) {
+            if (access.clickText(alias)) { opened = true; break; }
+        }
+        final boolean searchOpened = opened;
+        final String q = query.trim();
+        if (!searchOpened) {
+            speak("No encontré un control de búsqueda accesible en esta pantalla; no escribiré en otro campo.");
+            return;
+        }
+        main.postDelayed(() -> {
+            AgentAccessibilityService a = AgentAccessibilityService.getInstance();
+            if (a != null && a.setFocusedText(q)) {
+                silent("Búsqueda escrita: " + compact(q, 45) + ".");
+            } else {
+                speak("Abrí la búsqueda, pero no pude escribir en el campo.");
+            }
+        }, 420);
+    }
+
+    private void blackjackAdvice(String request) {
+        BlackjackEngine.Recommendation rec = BlackjackEngine.recommendFromText(
+                (request == null ? "" : request) + " " + lastText);
+        if (!rec.known()) {
+            speak("No pude leer con seguridad la mano. Escríbeme algo como: tengo 16 contra 10, o deja visibles el total del jugador y la carta del dealer.");
+            return;
+        }
+        speak("Blackjack: " + rec.actionLabelEs() + ". " + rec.reason
+                + " Asumo estrategia básica de varias barajas, dealer se planta en 17 suave y doble después de separar.");
+    }
+
+    private void blackjackPlay(String request) {
+        String context = (request == null ? "" : request) + " " + lastText + " " + currentUnderstandingContext();
+        BlackjackEngine.Recommendation rec = BlackjackEngine.recommendFromText(context);
+        if (!rec.known()) {
+            speak("No puedo jugar esta mano porque no distingo con seguridad tus cartas y la carta del dealer. Puedo aprender la interfaz o puedes escribir la mano.");
+            return;
+        }
+        if (BlackjackEngine.isRealMoneyContext(context)) {
+            speak("Detecto un contexto de dinero real. Puedo decirte la jugada de estrategia básica, pero no voy a ejecutar decisiones de apuestas automáticamente. Recomiendo "
+                    + rec.actionLabelEs() + ".");
+            return;
+        }
+        if (!BlackjackEngine.isPracticeContext(context)) {
+            speak("Puedo recomendar " + rec.actionLabelEs()
+                    + ", pero solo ejecuto blackjack automáticamente cuando la pantalla indica práctica, demo o juego gratis.");
+            return;
+        }
+        AgentAccessibilityService access = AgentAccessibilityService.getInstance();
+        if (access == null) {
+            speak("Necesito Control de pantalla activo para jugar la mano de práctica.");
+            return;
+        }
+        for (String label : BlackjackEngine.labelsFor(rec.decision)) {
+            if (access.clickText(label)) {
+                silent("Blackjack práctica: " + rec.actionLabelEs() + ".");
+                return;
+            }
+        }
+        speak("La recomendación es " + rec.actionLabelEs()
+                + ", pero no encontré ese botón como control accesible.");
+    }
+
+    private boolean transientPackage(String pkg) {
+        String n = IntentAgent.normalize(pkg == null ? "" : pkg.replace('.', ' '));
+        return n.isEmpty()
+                || n.equals(IntentAgent.normalize(getPackageName().replace('.', ' ')))
+                || n.contains("inputmethod") || n.contains("keyboard")
+                || n.contains("latin ime") || n.contains("gboard");
+    }
+
+    private String currentContentPackage() {
+        String pkg = AgentAccessibilityService.getActivePackageName();
+        if (transientPackage(pkg)) pkg = lastContentPackage;
+        return pkg == null ? "" : pkg;
+    }
+
+    private String appLabel(String pkg) {
+        if (pkg == null || pkg.trim().isEmpty()) return "";
+        try {
+            android.content.pm.ApplicationInfo info = getPackageManager().getApplicationInfo(pkg, 0);
+            CharSequence label = getPackageManager().getApplicationLabel(info);
+            return label == null ? pkg : label.toString().trim();
+        } catch (Exception e) {
+            return pkg;
+        }
+    }
+
+    private boolean genericCurrentTarget(String requested) {
+        String n = IntentAgent.normalize(requested);
+        return n.isEmpty() || n.equals("esta app") || n.equals("esta aplicacion")
+                || n.equals("la app") || n.equals("la aplicacion") || n.equals("este juego")
+                || n.equals("el juego") || n.equals("juego actual") || n.equals("aplicacion actual");
+    }
+
+    private void closeRequestedApp(String requested) {
+        AgentAccessibilityService access = AgentAccessibilityService.getInstance();
+        if (access == null) {
+            speak("Necesito Control de pantalla activo para salir de la aplicación.");
+            return;
+        }
+        String pkg = currentContentPackage();
+        String label = appLabel(pkg);
+        if (pkg.isEmpty() || label.isEmpty()) {
+            speak("No puedo identificar qué aplicación está abierta.");
+            return;
+        }
+        String wanted = IntentAgent.normalize(requested);
+        String labelN = IntentAgent.normalize(label);
+        String packageN = IntentAgent.normalize(pkg.replace('.', ' '));
+        boolean matches = genericCurrentTarget(requested)
+                || labelN.equals(wanted) || labelN.contains(wanted) || wanted.contains(labelN)
+                || packageN.contains(wanted);
+        if (!matches) {
+            speak("Ahora mismo está abierta " + label + ". Para evitar cerrar otra app por error, abre la aplicación que quieras cerrar y vuelve a pedírmelo.");
+            return;
+        }
+        if (access.home()) {
+            silent("Salí de " + compact(label, 34) + ".");
+        } else {
+            speak("No pude volver a la pantalla principal.");
+        }
+    }
+
+    private void learnCurrentApp() {
+        String pkg = currentContentPackage();
+        String label = appLabel(pkg);
+        if (pkg.isEmpty() || label.isEmpty() || pkg.equals(getPackageName())) {
+            speak("No puedo identificar el juego o la aplicación que quieres que aprenda. Déjala visible e inténtalo otra vez.");
+            return;
+        }
+
+        learningPackage = pkg;
+        learningSkillName = label;
+        learningUntil = SystemClock.elapsedRealtime() + 5 * 60 * 1000L;
+        learningObservationCount = 0;
+        lastLearningSnapshot = "";
+        lastLearningObservationAt = 0;
+
+        AgentAccessibilityService access = AgentAccessibilityService.getInstance();
+        String controls = access == null ? "" : access.listInteractiveElements();
+        String previous = skills.getSkillNotes(label);
+        JSONArray previousSources = skills.getSkillSourcesArray(label);
+        String initial = "[Análisis local de " + label + "]\n"
+                + "Paquete: " + pkg + "\n"
+                + "Pantalla inicial: " + compact(lastText, 1100) + "\n"
+                + "Controles iniciales: " + compact(controls, 900);
+        String merged = previous == null || previous.trim().isEmpty()
+                ? initial : previous + "\n\n" + initial;
+        if (merged.length() > 7000) merged = merged.substring(merged.length() - 7000);
+        skills.saveSkill(label, merged, previousSources);
+        activeSkillState = skills.getActiveSkillName();
+        recordLearningObservation(lastText);
+        silent("Analizando " + compact(label, 32) + " durante los próximos minutos…");
+
+        final String skillName = label;
+        ResearchEngine.research(label, new ResearchEngine.Callback() {
+            @Override public void onSuccess(String notes, JSONArray sources) {
+                main.post(() -> {
+                    String observed = skills.getSkillNotes(skillName);
+                    String combined = observed + "\n\n[Investigación gratuita]\n" + notes;
+                    if (combined.length() > 7000) combined = combined.substring(combined.length() - 7000);
+                    skills.saveSkill(skillName, combined, sources);
+                    activeSkillState = skills.getActiveSkillName();
+                    silent("Aprendizaje activo: " + compact(skillName, 34) + ".");
+                });
+            }
+
+            @Override public void onError(String message) {
+                main.post(() -> {
+                    // Local observation remains useful even when public sources have no article.
+                    activeSkillState = skills.getActiveSkillName();
+                    silent("Aprendiendo " + compact(skillName, 34) + " desde la pantalla.");
+                });
+            }
+        });
+    }
+
+    private void recordLearningObservation(String text) {
+        if (learningPackage.isEmpty() || learningSkillName.isEmpty()) return;
+        long now = SystemClock.elapsedRealtime();
+        if (now > learningUntil || learningObservationCount >= 20) {
+            learningPackage = "";
+            return;
+        }
+        String pkg = currentContentPackage();
+        if (!learningPackage.equals(pkg)) return;
+        if (now - lastLearningObservationAt < 3500) return;
+        String snapshot = compact(text, 1000) + " | Controles/OCR: " + compact(visionSummary(), 500);
+        String normalized = IntentAgent.normalize(snapshot);
+        if (normalized.length() < 12 || normalized.equals(lastLearningSnapshot)) return;
+        if (!lastLearningSnapshot.isEmpty()
+                && (normalized.contains(lastLearningSnapshot) || lastLearningSnapshot.contains(normalized))) return;
+
+        String existing = skills.getSkillNotes(learningSkillName);
+        String addition = "\n\n[Observación " + (learningObservationCount + 1) + "]\n" + snapshot;
+        String combined = existing + addition;
+        if (combined.length() > 7000) combined = combined.substring(combined.length() - 7000);
+        skills.saveSkill(learningSkillName, combined, skills.getSkillSourcesArray(learningSkillName));
+        activeSkillState = skills.getActiveSkillName();
+        lastLearningSnapshot = normalized;
+        lastLearningObservationAt = now;
+        learningObservationCount++;
     }
 
     private void learn(String topic) {
@@ -608,9 +1196,11 @@ public class ScreenAgentService22 extends Service {
                 && SystemClock.elapsedRealtime() < pendingSensitiveUntil
                 && relatedTargets(target, pendingSensitive)) {
             String targetToUse = pendingSensitive;
+            boolean wasLong = pendingSensitiveLong;
             pendingSensitive = "";
+            pendingSensitiveLong = false;
             pendingSensitiveUntil = 0;
-            click(targetToUse, true);
+            if (wasLong) longClick(targetToUse, true); else click(targetToUse, true);
         } else {
             silent("No hay una acción sensible pendiente con ese nombre.");
         }
@@ -630,8 +1220,9 @@ public class ScreenAgentService22 extends Service {
             speak("Dime qué botón quieres pulsar.");
             return;
         }
-        if (!confirmed && sensitive(target)) {
+        if (!confirmed && (sensitive(target) || affirmativeOnSensitiveScreen(target))) {
             pendingSensitive = target;
+            pendingSensitiveLong = false;
             pendingSensitiveUntil = SystemClock.elapsedRealtime() + 15000;
             speak("Esa acción puede ser destructiva. Si de verdad quieres continuar, di: confirma pulsa " + target + ".");
             return;
@@ -665,7 +1256,18 @@ public class ScreenAgentService22 extends Service {
                 : "No encontré ese control mediante Accesibilidad. La captura actual no cubre toda la pantalla, así que no haré un toque visual impreciso.");
     }
 
-    private void longClick(String target) {
+    private void longClick(String target, boolean confirmed) {
+        if (target == null || target.trim().isEmpty()) {
+            speak("Dime qué control quieres mantener presionado.");
+            return;
+        }
+        if (!confirmed && (sensitive(target) || affirmativeOnSensitiveScreen(target))) {
+            pendingSensitive = target;
+            pendingSensitiveLong = true;
+            pendingSensitiveUntil = SystemClock.elapsedRealtime() + 15000;
+            speak("Esa acción puede ser destructiva. Si quieres continuar, di: confirma pulsa " + target + ".");
+            return;
+        }
         AgentAccessibilityService a = AgentAccessibilityService.getInstance();
         if (a == null) {
             speak("Necesito Control de pantalla activo en Accesibilidad.");
@@ -673,11 +1275,22 @@ public class ScreenAgentService22 extends Service {
         }
         for (String alias : AndroidSkillPack.aliasesForTarget(target)) {
             if (a.longClickText(alias)) {
-                silent("Mantuve presionado " + alias + ".");
+                silent(confirmed ? "Acción confirmada y ejecutada." : "Pulsación larga ejecutada.");
                 return;
             }
         }
         speak("No encontré un control que admita pulsación larga con ese nombre.");
+    }
+
+    private boolean affirmativeOnSensitiveScreen(String target) {
+        String t = IntentAgent.normalize(target);
+        boolean affirmative = has(t, "aceptar", "acepta", "ok", "si", "confirmar", "continuar", "yes", "proceed");
+        if (!affirmative) return false;
+        String screen = IntentAgent.normalize(lastText);
+        return has(screen, "desinstalar", "uninstall", "factory reset", "restablecer de fabrica",
+                "borrar todos los datos", "eliminar todos los datos", "erase all data",
+                "eliminar cuenta", "delete account", "remove account", "formatear",
+                "pagar", "comprar", "transferir", "enviar dinero");
     }
 
     private boolean relatedTargets(String a, String b) {
@@ -726,9 +1339,9 @@ public class ScreenAgentService22 extends Service {
         if ((skill == null || skill.isEmpty()) && !activeSkillState.isEmpty()) skill = activeSkillState;
         String notes = skill == null ? "" : skills.getSkillNotes(skill);
         if (!notes.isEmpty()) {
-            return "Entendí tu petición. Con la habilidad " + skill + ", esto es lo más relevante: " + summarize(notes, 460);
+            return "Con la habilidad " + skill + ", esto es lo más relevante: " + summarize(notes, 460);
         }
-        return "Entendí lo que dijiste. Puedo abrir aplicaciones, manejar controles de Android, analizar la pantalla, aprender habilidades o ejecutar una acción que me indiques.";
+        return "Puedo seguir el contexto de la conversación, responder preguntas o actuar sobre Android cuando me lo pidas.";
     }
 
     private void onImage(ImageReader source) {
@@ -741,17 +1354,21 @@ public class ScreenAgentService22 extends Service {
             return;
         }
         lastProcess = now;
+        final long requestGeneration = captureGeneration;
+        final int requestW = captureW, requestH = captureH;
         Bitmap b = imageToBitmap(image);
         image.close();
         if (b == null) return;
         ocr.process(InputImage.fromBitmap(b, 0))
                 .addOnSuccessListener(t -> {
                     b.recycle();
+                    if (requestGeneration != captureGeneration || requestW != captureW || requestH != captureH) return;
                     updateVision(t);
                     String text = t.getText() == null ? "" : t.getText().trim();
                     if (text.equals(lastText)) return;
                     lastText = text;
                     activateContext(text);
+                    recordLearningObservation(text);
                     passiveOverlay();
                 })
                 .addOnFailureListener(e -> b.recycle());
@@ -824,6 +1441,7 @@ public class ScreenAgentService22 extends Service {
 
     private void activateContext(String text) {
         String pkg = AgentAccessibilityService.getActivePackageName();
+        if (!transientPackage(pkg)) lastContentPackage = pkg;
         String ctx = IntentAgent.normalize(pkg + " " + text);
         if (ctx.isEmpty()) return;
 
@@ -879,18 +1497,35 @@ public class ScreenAgentService22 extends Service {
         ttsPendingStart = true;
         ignoreUntil = 0;
         bargeInterrupted = false;
+        final String utteranceId = "screen23_" + SystemClock.elapsedRealtime();
+        activeUtteranceId = utteranceId;
         try {
-            int result = tts.speak(value, TextToSpeech.QUEUE_FLUSH, null,
-                    "screen22_" + SystemClock.elapsedRealtime());
+            int result = tts.speak(value, TextToSpeech.QUEUE_FLUSH, null, utteranceId);
             if (result == TextToSpeech.ERROR) {
+                if (activeUtteranceId.equals(utteranceId)) activeUtteranceId = "";
                 ttsPendingStart = false;
-                ignoreUntil = SystemClock.elapsedRealtime() + 300;
-                startListening(300);
+                ignoreUntil = SystemClock.elapsedRealtime() + 200;
+                cuePending = true;
+                startListening(200);
+            } else {
+                main.postDelayed(() -> {
+                    if (activeUtteranceId.equals(utteranceId) && ttsPendingStart && !speaking) {
+                        activeUtteranceId = "";
+                        ttsPendingStart = false;
+                        ignoreUntil = SystemClock.elapsedRealtime() + 100;
+                        cuePending = true;
+                        voiceStatus = "preparando escucha";
+                        passiveOverlay();
+                        startListening(120);
+                    }
+                }, 3000);
             }
         } catch (Exception e) {
+            if (activeUtteranceId.equals(utteranceId)) activeUtteranceId = "";
             ttsPendingStart = false;
-            ignoreUntil = SystemClock.elapsedRealtime() + 300;
-            startListening(300);
+            ignoreUntil = SystemClock.elapsedRealtime() + 200;
+            cuePending = true;
+            startListening(200);
         }
     }
 
@@ -902,8 +1537,9 @@ public class ScreenAgentService22 extends Service {
     private void passiveOverlay() {
         AgentAccessibilityService a = AgentAccessibilityService.getInstance();
         if (a == null || !a.isOverlayVisible()) return;
-        String s = listeningEnabled ? "🎙 " + compact(voiceStatus, 38) : "🎙 Escucha pausada";
-        if (!activeSkillState.isEmpty()) s += "\nHabilidad: " + compact(activeSkillState, 26);
+        String s = listeningEnabled ? "🎙 " + compact(voiceStatus, 38) : "🎙 Escucha pausada · ⌨ texto activo";
+        if (!activeSkillState.isEmpty()) s += "\nHabilidad: " + compact(activeSkillState, 24);
+        if (!aiStatusState.isEmpty()) s += "\n" + compact(aiStatusState, 28);
         a.updateOverlay(s);
     }
 
@@ -917,7 +1553,7 @@ public class ScreenAgentService22 extends Service {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         Notification.Builder b = Build.VERSION.SDK_INT >= 26
                 ? new Notification.Builder(this, CHANNEL) : new Notification.Builder(this);
-        return b.setContentTitle("Screen Observer Pro 2.2")
+        return b.setContentTitle("Screen Observer Pro 2.6")
                 .setContentText(listeningEnabled
                         ? "Agente local · Android 15/16 · modo silencioso"
                         : "Agente local · escucha pausada")
@@ -937,7 +1573,7 @@ public class ScreenAgentService22 extends Service {
         if (Build.VERSION.SDK_INT < 26) return;
         NotificationManager n = getSystemService(NotificationManager.class);
         if (n != null) n.createNotificationChannel(new NotificationChannel(
-                CHANNEL, "Asistente de pantalla 2.2", NotificationManager.IMPORTANCE_LOW));
+                CHANNEL, "Asistente de pantalla 2.4", NotificationManager.IMPORTANCE_LOW));
     }
 
     private static boolean has(String s, String... xs) {
@@ -958,6 +1594,7 @@ public class ScreenAgentService22 extends Service {
         listeningState = false;
         voiceStatus = "detenido";
         activeSkillState = "";
+        aiStatusState = "IA local pendiente";
         ttsPendingStart = false;
         main.removeCallbacksAndMessages(null);
         if (barge != null) barge.stop();
@@ -967,6 +1604,8 @@ public class ScreenAgentService22 extends Service {
         if (virtualDisplay != null) try { virtualDisplay.release(); } catch (Exception ignored) { }
         if (projection != null) try { projection.stop(); } catch (Exception ignored) { }
         if (ocr != null) try { ocr.close(); } catch (Exception ignored) { }
+        if (languageAgent != null) try { languageAgent.close(); } catch (Exception ignored) { }
+        actionExecutor.shutdownNow();
         if (tts != null) try { tts.stop(); tts.shutdown(); } catch (Exception ignored) { }
         super.onDestroy();
     }

@@ -1,5 +1,6 @@
 package com.erik.screenobserver
 
+import android.app.ActivityManager
 import android.content.Context
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Contents
@@ -45,21 +46,46 @@ class LocalLanguageAgent(
     )
 
     private data class Hypothesis(val text: String, val score: Float?)
+    private data class ModelSpec(
+        val fileName: String,
+        val url: String,
+        val minBytes: Long,
+        val label: String,
+    )
 
     companion object {
-        private const val MODEL_FILE = "qwen3_0.6b_nothink_q4_block32_ekv1280.litertlm"
-        private const val MODEL_URL =
-            "https://huggingface.co/litert-community/Qwen3-0.6B-int4/resolve/main/qwen3_0.6b_nothink_q4_block32_ekv1280.litertlm?download=true"
-        private const val MIN_MODEL_BYTES = 300_000_000L
+        private val STANDARD_MODEL = ModelSpec(
+            "qwen3_0.6b_nothink_q4_block32_ekv1280.litertlm",
+            "https://huggingface.co/litert-community/Qwen3-0.6B-int4/resolve/main/qwen3_0.6b_nothink_q4_block32_ekv1280.litertlm?download=true",
+            300_000_000L,
+            "Qwen3 0.6B",
+        )
+        // Apache-2.0 LiteRT-LM build published by litert-community. It is much larger
+        // (~2.06 GB), so it is selected only on devices with enough physical RAM and storage.
+        private val ENHANCED_MODEL = ModelSpec(
+            "Qwen3_1.7B.litertlm",
+            "https://huggingface.co/litert-community/Qwen3-1.7B/resolve/main/Qwen3_1.7B.litertlm?download=true",
+            1_900_000_000L,
+            "Qwen3 1.7B mejorada",
+        )
+        private const val ENHANCED_MIN_RAM_BYTES = 7_500_000_000L
+        private const val ENHANCED_MIN_FREE_BYTES = 3_200_000_000L
         private const val MIN_ACTION_SPEECH_CONFIDENCE = 0.30f
 
         private val ACTIONS = IntentAgent.Type.entries.joinToString(",") { it.name }
 
         private val SYSTEM_PROMPT = """
-            Eres el cerebro conversacional de un asistente Android privado que funciona en el teléfono del usuario.
+            Eres el cerebro conversacional de un asistente Android privado que funciona en el teléfono del usuario. Recibes voz transcrita o instrucciones escritas.
             Entiende español natural, conversación de varios turnos, referencias como "eso", "ahora", "el de arriba" y sinónimos.
             No repitas ni parafrasees innecesariamente lo que acaba de decir el usuario. Responde de manera natural y breve.
             Cuando el usuario quiera una acción en el teléfono, clasifícala usando uno de estos tipos exactos: $ACTIONS.
+            Casos importantes: ir, volver o abrir la pantalla principal del celular = HOME.
+            "cierra WhatsApp", "sal de WhatsApp" o "cierra esta app" = CLOSE_APP, con el nombre de la app en argument cuando exista.
+            "analiza este juego para aprender a usarlo", "aprende a usar este juego" o equivalentes = LEARN_CURRENT_APP.
+            Buscar dentro de la app = SEARCH con la consulta en argument. Abrir Wi-Fi/Bluetooth/sonido/pantalla/batería/ubicación = OPEN_SETTINGS_SECTION.
+            Deslizar horizontalmente = SWIPE_LEFT o SWIPE_RIGHT. Cambiar audio = VOLUME_UP, VOLUME_DOWN, VOLUME_MUTE o VOLUME_UNMUTE.
+            "reanuda la escucha" = RESUME_LISTENING. Una URL o dominio pedido explícitamente = OPEN_URL.
+            Blackjack: pedir consejo = BLACKJACK_ADVICE; jugar una mano de práctica = BLACKJACK_PLAY. Nunca inventes cartas que no estén en la entrada o la pantalla.
             Para conversación o preguntas generales usa GENERAL y responde en reply.
             Para acciones coloca el objeto/control/app/texto en argument y deja reply vacío salvo que una aclaración sea necesaria.
             No inventes que una acción ya ocurrió: solo clasifica la intención. La app ejecutará la acción después.
@@ -73,8 +99,9 @@ class LocalLanguageAgent(
 
     private val appContext = context.applicationContext
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
+    private val gemini = GeminiRemoteAgent(appContext)
     private val modelDir = File(appContext.filesDir, "models")
-    private val modelFile = File(modelDir, MODEL_FILE)
+    @Volatile private var activeModelLabel = "IA local"
 
     @Volatile private var engine: Engine? = null
     @Volatile private var conversation: Conversation? = null
@@ -85,34 +112,56 @@ class LocalLanguageAgent(
     fun start() {
         executor.execute {
             if (closed || ready) return@execute
-            try {
-                ensureModel()
-                if (closed) return@execute
-                updateStatus("Cargando IA local…")
-                val cfg = EngineConfig(
-                    modelPath = modelFile.absolutePath,
-                    backend = Backend.CPU(),
-                    cacheDir = appContext.cacheDir.absolutePath,
-                )
-                val newEngine = Engine(cfg)
-                newEngine.initialize()
-                if (closed) {
-                    newEngine.close()
-                    return@execute
-                }
-                val convoCfg = ConversationConfig(
-                    systemInstruction = Contents.of(SYSTEM_PROMPT),
-                    samplerConfig = SamplerConfig(topK = 20, topP = 0.92, temperature = 0.25),
-                )
-                val newConversation = newEngine.createConversation(convoCfg)
-                engine = newEngine
-                conversation = newConversation
-                ready = true
-                updateStatus("IA local lista")
-            } catch (t: Throwable) {
-                ready = false
-                updateStatus("IA local no disponible; usando respaldo")
+            if (GeminiRemoteAgent.hasApiKey(appContext)) {
+                updateStatus("Gemini 2.5 Flash configurado")
+                return@execute
             }
+            val preferred = if (supportsEnhancedModel()) ENHANCED_MODEL else STANDARD_MODEL
+            val candidates = if (preferred === ENHANCED_MODEL)
+                listOf(ENHANCED_MODEL, STANDARD_MODEL)
+            else listOf(STANDARD_MODEL)
+            var lastFailure: Throwable? = null
+
+            for ((index, spec) in candidates.withIndex()) {
+                if (closed) return@execute
+                var newEngine: Engine? = null
+                try {
+                    val file = ensureModel(spec)
+                    if (closed) return@execute
+                    updateStatus("Cargando ${spec.label}…")
+                    val cfg = EngineConfig(
+                        modelPath = file.absolutePath,
+                        backend = Backend.CPU(),
+                        cacheDir = appContext.cacheDir.absolutePath,
+                    )
+                    newEngine = Engine(cfg)
+                    newEngine.initialize()
+                    if (closed) {
+                        newEngine.close()
+                        return@execute
+                    }
+                    val convoCfg = ConversationConfig(
+                        systemInstruction = Contents.of(SYSTEM_PROMPT),
+                        samplerConfig = SamplerConfig(topK = 20, topP = 0.90, temperature = 0.15),
+                    )
+                    val newConversation = newEngine.createConversation(convoCfg)
+                    engine = newEngine
+                    conversation = newConversation
+                    activeModelLabel = spec.label
+                    ready = true
+                    updateStatus("IA local lista · ${spec.label}")
+                    return@execute
+                } catch (t: Throwable) {
+                    lastFailure = t
+                    try { newEngine?.close() } catch (_: Throwable) { }
+                    if (index + 1 < candidates.size) {
+                        updateStatus("IA mejorada no disponible; usando modelo ligero…")
+                    }
+                }
+            }
+            ready = false
+            updateStatus("IA local no disponible; usando respaldo")
+            if (lastFailure is InterruptedException && closed) return@execute
         }
     }
 
@@ -142,12 +191,64 @@ class LocalLanguageAgent(
         val hasScores = hypotheses.any { it.score != null }
         val fallbackScores = if (hasScores) FloatArray(hypotheses.size) { hypotheses[it].score ?: -1f } else null
         val fallback = IntentAgent.interpret(fallbackTexts, fallbackScores, activeSkill ?: "", screenText ?: "")
-        if (!isReady()) {
+
+        // Explicit, high-confidence commands remain deterministic and retain the
+        // speech-reliability safety gate. Gemini handles paraphrases/conversation.
+        if (fallback.type != IntentAgent.Type.GENERAL
+            && fallback.confidence >= 0.80
+            && (!isActionable(fallback.type) || hasReliableSpeech(hypotheses))
+        ) {
             callback.onResult(Result(fallback.type, fallback.argument, "", fallback.confidence, false))
             return
         }
 
         val modelHypotheses = filterHypothesesForModel(hypotheses)
+        if (GeminiRemoteAgent.hasApiKey(appContext)) {
+            updateStatus("Pensando con Gemini…")
+            gemini.interpret(
+                modelHypotheses.map { it.text },
+                screenText,
+                activeSkill,
+            ) geminiCallback@ { remote ->
+                if (remote == null) {
+                    updateStatus(if (isReady()) "Gemini no disponible · usando IA local" else "Gemini no disponible · usando respaldo")
+                    if (isReady()) {
+                        interpretLocalModel(modelHypotheses, screenText, activeSkill, fallback, callback)
+                    } else {
+                        callback.onResult(Result(fallback.type, fallback.argument, "", fallback.confidence, false))
+                    }
+                    return@geminiCallback
+                }
+                var parsed = Result(remote.type, remote.argument, remote.reply, remote.confidence, true)
+                if (isActionable(parsed.type) && !hasReliableSpeech(modelHypotheses)) {
+                    parsed = Result(
+                        IntentAgent.Type.GENERAL,
+                        "",
+                        "No estoy lo bastante seguro de la orden. Repítela después de la señal.",
+                        0.40,
+                        true,
+                    )
+                }
+                updateStatus("Gemini 2.5 Flash listo")
+                callback.onResult(parsed)
+            }
+            return
+        }
+        if (!isReady()) {
+            callback.onResult(Result(fallback.type, fallback.argument, "", fallback.confidence, false))
+            return
+        }
+
+        interpretLocalModel(modelHypotheses, screenText, activeSkill, fallback, callback)
+    }
+
+    private fun interpretLocalModel(
+        modelHypotheses: List<Hypothesis>,
+        screenText: String?,
+        activeSkill: String?,
+        fallback: IntentAgent.Result,
+        callback: Callback,
+    ) {
         executor.execute {
             if (closed || !isReady()) {
                 callback.onResult(Result(fallback.type, fallback.argument, "", fallback.confidence, false))
@@ -155,7 +256,6 @@ class LocalLanguageAgent(
             }
             try {
                 val prompt = buildPrompt(modelHypotheses, screenText, activeSkill)
-                // LiteRT-LM 0.14 documents Message as directly printable/toString consumable.
                 val raw = conversation!!.sendMessage(prompt).toString()
                 var parsed = parseModelResult(raw, fallback)
                 if (isActionable(parsed.type) && !hasReliableSpeech(modelHypotheses)) {
@@ -211,7 +311,21 @@ class LocalLanguageAgent(
         IntentAgent.Type.LOCK_SCREEN,
         IntentAgent.Type.SCREENSHOT,
         IntentAgent.Type.OPEN_SETTINGS,
-        IntentAgent.Type.OPEN_APP -> true
+        IntentAgent.Type.OPEN_SETTINGS_SECTION,
+        IntentAgent.Type.OPEN_URL,
+        IntentAgent.Type.OPEN_APP,
+        IntentAgent.Type.CLOSE_APP,
+        IntentAgent.Type.LEARN_CURRENT_APP,
+        IntentAgent.Type.RESUME_LISTENING,
+        IntentAgent.Type.CLICK_ORDINAL,
+        IntentAgent.Type.SEARCH,
+        IntentAgent.Type.SWIPE_LEFT,
+        IntentAgent.Type.SWIPE_RIGHT,
+        IntentAgent.Type.VOLUME_UP,
+        IntentAgent.Type.VOLUME_DOWN,
+        IntentAgent.Type.VOLUME_MUTE,
+        IntentAgent.Type.VOLUME_UNMUTE,
+        IntentAgent.Type.BLACKJACK_PLAY -> true
         else -> false
     }
 
@@ -226,7 +340,7 @@ class LocalLanguageAgent(
             else "${index + 1}) ${clip(hypothesis.text, 180)}"
         }.joinToString(" | ")
         return buildString {
-            append("Voz: ").append(hypothesisText)
+            append("Entrada del usuario: ").append(hypothesisText)
             append("\nHabilidad activa: ").append(clip(activeSkill ?: "", 80))
             append("\nApp activa: ").append(clip(AgentAccessibilityService.getActivePackageName(), 90))
             append("\nPantalla actual: ").append(clip(screenText ?: "", 520))
@@ -265,14 +379,28 @@ class LocalLanguageAgent(
         return out
     }
 
-    private fun ensureModel() {
-        if (modelFile.exists() && modelFile.length() >= MIN_MODEL_BYTES) return
-        modelDir.mkdirs()
-        val part = File(modelDir, "$MODEL_FILE.part")
-        if (part.exists()) part.delete()
-        updateStatus("Descargando IA local…")
+    private fun supportsEnhancedModel(): Boolean {
+        return try {
+            val am = appContext.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            val info = ActivityManager.MemoryInfo()
+            am?.getMemoryInfo(info)
+            val ramOk = info.totalMem >= ENHANCED_MIN_RAM_BYTES
+            val storageOk = modelDir.parentFile?.usableSpace?.let { it >= ENHANCED_MIN_FREE_BYTES } ?: false
+            ramOk && storageOk
+        } catch (_: Throwable) {
+            false
+        }
+    }
 
-        var url = URL(MODEL_URL)
+    private fun ensureModel(spec: ModelSpec): File {
+        val modelFile = File(modelDir, spec.fileName)
+        if (modelFile.exists() && modelFile.length() >= spec.minBytes) return modelFile
+        modelDir.mkdirs()
+        val part = File(modelDir, "${spec.fileName}.part")
+        if (part.exists()) part.delete()
+        updateStatus("Descargando ${spec.label}…")
+
+        var url = URL(spec.url)
         var connection: HttpURLConnection? = null
         for (hop in 0..5) {
             val current = (url.openConnection() as HttpURLConnection).apply {
@@ -280,7 +408,7 @@ class LocalLanguageAgent(
                 connectTimeout = 20_000
                 readTimeout = 45_000
                 requestMethod = "GET"
-                setRequestProperty("User-Agent", "ScreenObserverPro/2.3")
+                setRequestProperty("User-Agent", "ScreenObserverPro/2.6")
                 setRequestProperty("Accept", "application/octet-stream")
             }
             val code = current.responseCode
@@ -317,7 +445,7 @@ class LocalLanguageAgent(
                             val pct = ((copied * 100) / total).toInt()
                             if (pct >= lastPercent + 5) {
                                 lastPercent = pct
-                                updateStatus("Descargando IA local… ${pct.coerceAtMost(100)}%")
+                                updateStatus("Descargando ${spec.label}… ${pct.coerceAtMost(100)}%")
                             }
                         }
                         if (closed) throw InterruptedException("closed")
@@ -328,7 +456,7 @@ class LocalLanguageAgent(
         } finally {
             conn.disconnect()
         }
-        if (part.length() < MIN_MODEL_BYTES) {
+        if (part.length() < spec.minBytes) {
             part.delete()
             throw IllegalStateException("Modelo incompleto")
         }
@@ -337,6 +465,7 @@ class LocalLanguageAgent(
             part.copyTo(modelFile, overwrite = true)
             part.delete()
         }
+        return modelFile
     }
 
     private fun updateStatus(value: String) {
@@ -352,6 +481,7 @@ class LocalLanguageAgent(
     override fun close() {
         closed = true
         ready = false
+        try { gemini.close() } catch (_: Throwable) { }
         try { conversation?.close() } catch (_: Throwable) { }
         try { engine?.close() } catch (_: Throwable) { }
         conversation = null

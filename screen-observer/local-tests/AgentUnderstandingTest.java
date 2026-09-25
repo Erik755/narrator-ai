@@ -32,6 +32,16 @@ public final class AgentUnderstandingTest {
         type("toma una captura", IntentAgent.Type.SCREENSHOT, "", "", "");
         type("abre el menú de energía", IntentAgent.Type.POWER_MENU, "", "", "");
         type("hay poca privacidad", IntentAgent.Type.GENERAL, "", "", "");
+        type("abre la pantalla principal del celular", IntentAgent.Type.HOME, "", "", "");
+        type("ve a la pantalla principal", IntentAgent.Type.HOME, "", "", "");
+        type("cierra WhatsApp", IntentAgent.Type.CLOSE_APP, "WhatsApp", "", "");
+        type("sal de WhatsApp", IntentAgent.Type.CLOSE_APP, "WhatsApp", "", "");
+        type("analiza este juego para que aprendas a usarlo", IntentAgent.Type.LEARN_CURRENT_APP, "", "", "");
+        type("aprende a usar este juego", IntentAgent.Type.LEARN_CURRENT_APP, "", "", "");
+        type("analiza el juego", IntentAgent.Type.LEARN_CURRENT_APP, "", "", "");
+        type("analiza un juego", IntentAgent.Type.LEARN_CURRENT_APP, "", "", "");
+        type("aprende a usar el juego", IntentAgent.Type.LEARN_CURRENT_APP, "", "", "");
+        type("cierra la burbuja", IntentAgent.Type.HIDE_OVERLAY, "", "", "");
 
         lowConfidenceActionDoesNotWin();
         lowConfidenceSoleActionIsRejected();
