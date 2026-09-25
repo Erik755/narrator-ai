@@ -1,6 +1,5 @@
 # Narrator AI
 
-[![CI](https://github.com/Erik755/narrator-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/Erik755/narrator-ai/actions/workflows/ci.yml)
 ![JavaScript](https://img.shields.io/badge/JavaScript-Vite-F7DF1E?logo=javascript&logoColor=black)
 ![Android](https://img.shields.io/badge/Android-Java%20%7C%20Kotlin-3DDC84?logo=android&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
@@ -79,7 +78,7 @@ javac -d build/local-tests $SRC/TextNormalizer.java $SRC/BlackjackEngine.java $S
   $SRC/ConversationEngine.java local-tests/*.java
 java -cp build/local-tests PhoneCommandMatrixTest
 ```
-All suites run on every push and pull request in [CI](.github/workflows/ci.yml).
+Run the other suites the same way: `AgentUnderstandingTest`, `BlackjackEngineTest`, `V25ReviewRegressionTest`.
 
 ---
 
